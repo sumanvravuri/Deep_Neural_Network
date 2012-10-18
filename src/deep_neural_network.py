@@ -38,7 +38,7 @@ class Neural_Network(object):
                                'do_pretrain', 'pretrain_method', 'pretrain_iterations', 
                                'pretrain_learning_rate', 'pretrain_batch_size',
                                'do_backprop', 'backprop_method', 'backprop_batch_size', 'steepest_learning_rate',
-                               'conjugate_num_epochs', 'conjugate_num_line_searches', 'conjugate_max_iterations']
+                               'conjugate_num_epochs', 'conjugate_num_line_searches', 'conjugate_max_iterations', 'conjugate_const_type']
         self.required_variables['test'] =  ['mode', 'feature_file_name', 'weight_matrix_name', 'output_name']
         self.all_variables['test'] =  self.required_variables['test'] + ['label_file_name']
     def dump_config_vals(self):
@@ -470,6 +470,7 @@ class NN_Trainer(Neural_Network):
             elif self.backprop_method == 'conjugate_gradient':
                 self.conjugate_max_iterations = self.default_variable_define(config_dictionary, 'conjugate_max_iterations', default_value=3, 
                                                                              arg_type='int')
+                self.conjugate_const_type = self.default_variable_define(config_dictionary, 'conjugate_const_type', arg_type='string', default_value='polak-ribiere')
                 self.conjugate_num_epochs = self.default_variable_define(config_dictionary, 'conjugate_num_epochs', default_value=20, arg_type='int')
                 self.conjugate_num_line_searches = self.default_variable_define(config_dictionary, 'conjugate_num_line_searches', default_value=20, arg_type='int')
             self.backprop_batch_size = self.default_variable_define(config_dictionary, 'backprop_batch_size', default_value=2048, arg_type='int')
@@ -528,7 +529,7 @@ class NN_Trainer(Neural_Network):
                         weight_cur_layer_type = ''.join([weight_cur_layer, '_type'])
                         inputs = self.forward_layer(inputs, self.weights[weight_cur_layer], self.weights[bias_cur_layer], self.weights[weight_cur_layer_type])
                 
-                    bias_cur_layer = ''.join(['bias', str(layer_num+1)])
+                    bias_cur_layer  = ''.join(['bias', str(layer_num+1)])
                     bias_prev_layer = ''.join(['bias', str(layer_num)])
                     weight_cur_layer = ''.join(['weights', str(layer_num), str(layer_num+1)])
                     weight_cur_layer_type = ''.join([weight_cur_layer, '_type'])
@@ -597,7 +598,7 @@ class NN_Trainer(Neural_Network):
                 self.weights[bias_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * bias_update
 
                 batch_index += self.backprop_batch_size
-            sys.stdout.write("\r100.0% done\n")
+            sys.stdout.write("\r100.0% done\r")
             print "average cross entropy at the end of epoch is", cross_entropy / num_training_examples
             print "number correctly classified is", num_corr_classified, "of", num_training_examples
     def backprop_conjugate_gradient(self): #Running... needs better interpolation methods
@@ -640,7 +641,8 @@ class NN_Trainer(Neural_Network):
                         failed_line_search = False
                         #update search direction
                         new_gradient = self.calculate_gradient(batch_inputs, batch_labels)
-                        conj_grad_dir = self.calculate_conjugate_gradient_direction(batch_inputs, batch_labels, old_gradient, new_gradient, conj_grad_dir)
+                        conj_grad_dir = self.calculate_conjugate_gradient_direction(batch_inputs, batch_labels, old_gradient, new_gradient, conj_grad_dir, 
+                                                                                    const_type=self.conjugate_const_type)
                         del old_gradient
                         old_gradient = new_gradient
                         del new_gradient
@@ -661,7 +663,7 @@ class NN_Trainer(Neural_Network):
                 num_corr_classified += int(self.calculate_classification_accuracy(batch_targets, batch_labels) * batch_size)
                 num_training_examples += batch_size
                 batch_index += self.backprop_batch_size
-            sys.stdout.write("\r100.0% done\n")
+            sys.stdout.write("\r100.0% done\r")
             print "average cross entropy at the end of epoch is", cross_entropy / num_training_examples
             print "number correctly classified is", num_corr_classified, "of", num_training_examples
     def calculate_conjugate_gradient_direction(self, batch_inputs, batch_labels, old_gradient, new_gradient, 
@@ -674,7 +676,7 @@ class NN_Trainer(Neural_Network):
         elif const_type == 'polak-ribiere+':
             cg_const = max((self.dot(new_gradient, new_gradient) - self.dot(new_gradient,old_gradient)) / self.dot(old_gradient, old_gradient),0)
         elif const_type == 'hestenes-stiefel': #might run into numerical stability issues
-            cg_const = (self.dot(new_gradient, new_gradient) - self.dot(new_gradient, old_gradient)) / (self.dot(new_gradient, current_conjugate_gradient_direction) - self.dot(old_gradient, current_conjugate_gradient_direction))
+            cg_const = (self.dot(new_gradient, new_gradient) - self.dot(new_gradient, old_gradient)) / max((self.dot(new_gradient, current_conjugate_gradient_direction) - self.dot(old_gradient, current_conjugate_gradient_direction)), 1E-4)
         else:
             print const_type, "not recognized, the only valid methods of \'polak-ribiere\', \'fletcher-reeves\', \'polak-ribiere+\', \'hestenes-stiefel\'... Exiting now"
             sys.exit()
@@ -859,20 +861,22 @@ class NN_Trainer(Neural_Network):
                     prev_step_size = proposed_step_size
         
         #if we made it this far, we ran out of line searches and line_search failed
-        print "line search failed, so restoring weights..."
+        print "\nline search failed, so restoring weights..."
         self.update_weights(-overall_step_size, direction) #restore previous weights
         return 0 #line search failed
     def interpolate_step_size(self, p1, p2):
         #p1 and p2 are tuples in form (x,f(x), f'(x)) and spits out minimum step size based on cubic interpolation of data
+        if abs(p2[0] - p1[0]) < 1E-4:
+            print "difference between two step sizes is small |p2 -p1|", abs(p2[0] - p1[0]), "returning bisect"
+            return (p1[0] + p2[0]) / 2
         b = (3 * (p2[1] - p1[1]) - (2 * p1[2] + p2[2])*(p2[0] - p1[0])) / (p2[0] - p1[0])**2
         a = (-2 * (p2[1] - p1[1]) + (p1[2] + p2[2])*(p2[0] - p1[0])) / (p2[0] - p1[0])**3
-        if b**2 > 3 * a * p1[2]: #cubic interp
+        if b**2 > 3 * a * p1[2] and math.isinf(a) == False and math.isnan(a) == False: #cubic interp
             return p1[0] + (-b + numpy.sqrt(b**2 - 3 * a * p1[2])) / (3 * a)
         elif b != 0: #quadratic interp
             return p1[0] - p1[2] / (2 * b)
         else: #bisect
             return (p1[0] + p2[0]) / 2
-        #return (p1[0] + p2[0]) / 2
     def open_weight_matrix(self): #completed
         extra_keys = 0
         try:    

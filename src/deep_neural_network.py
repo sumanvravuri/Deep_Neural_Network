@@ -26,6 +26,8 @@ class Neural_Network(object):
     #rbm_type is either gaussian_bernoulli, bernoulli_bernoulli, notrbm_logistic
     def __init__(self, config_dictionary): #completed
         #variables for Neural Network: feature_file_name(read from)
+        #required_variables - required variables for running system
+        #all_variables - all valid variables for each type
         self.feature_file_name = self.default_variable_define(config_dictionary, 'feature_file_name', arg_type='string')
         self.features = self.read_feature_file()
         self.output_name = self.default_variable_define(config_dictionary, 'output_name', arg_type='string')
@@ -180,7 +182,7 @@ class Neural_Network(object):
             sys.exit()
         else:
             print "seems copacetic"
-    def check_labels(self): #want to prune non-contiguous labels
+    def check_labels(self): #want to prune non-contiguous labels, might be expensive
         print "Checking labels..."
         if len(self.labels.shape) != 1 and ((len(self.labels.shape) == 2 and self.labels.shape[1] != 1) or len(self.labels.shape) > 2):
             print "labels need to be in (n_samples) or (n_samples,1) format and the shape of labels is ", self.labels.shape, "... Exiting now"
@@ -301,21 +303,21 @@ class Neural_Network(object):
             bias_cur_layer = ''.join(['bias',str(idx+1)])
             cur_layer = self.forward_layer(cur_layer, self.weights[weight_cur_layer], self.weights[bias_cur_layer], self.weights[weight_cur_layer_type])
         return cur_layer
-    def weight_matrix_multiply(self,inputs,weights,biases): #completed
+    def weight_matrix_multiply(self,inputs,weights,biases): #completed, expensive, should be compiled
         #print "input dims are ", inputs.shape
         #print "weight dims are ", weights.shape
         #print "bias dims are ", biases.shape
         return numpy.dot(inputs,weights)+numpy.tile(biases, (inputs.shape[0],1))
-    def calculate_cross_entropy(self, output, labels): #completed
-        return -numpy.sum(numpy.log([output.item((x,labels[x])) for x in range(labels.size)]))
-    def calculate_classification_accuracy(self, output, labels): #completed
+    def calculate_cross_entropy(self, output, labels): #completed, expensive, should be compiled
+        return -numpy.sum(numpy.log([max(output.item((x,labels[x])),1E-12) for x in range(labels.size)]))
+    def calculate_classification_accuracy(self, output, labels): #completed, possibly expensive
         prediction = output.argmax(axis=1).reshape(labels.shape)
         classification_accuracy = sum(prediction == labels) / float(labels.size)
         return classification_accuracy[0]
     #math functions
-    def sigmoid(self,inputs): #completed
+    def sigmoid(self,inputs): #completed, expensive, should be compiled
         return 1/(1+numpy.exp(-inputs)) #1/(1+e^-X)
-    def softmax(self, inputs): #completed
+    def softmax(self, inputs): #completed, expensive, should be compiled
         #subtracting max value of each data point below for numerical stability
         exp_inputs = numpy.exp(inputs - numpy.transpose(numpy.tile(numpy.max(inputs,axis=1), (inputs.shape[1],1))))
         return exp_inputs / numpy.transpose(numpy.tile(numpy.sum(exp_inputs, axis=1), (exp_inputs.shape[1],1)))
@@ -475,25 +477,6 @@ class NN_Trainer(Neural_Network):
                 self.conjugate_num_line_searches = self.default_variable_define(config_dictionary, 'conjugate_num_line_searches', default_value=20, arg_type='int')
             self.backprop_batch_size = self.default_variable_define(config_dictionary, 'backprop_batch_size', default_value=2048, arg_type='int')
         self.dump_config_vals()
-    def forward_first_order_methods(self, inputs): #need to check
-        #returns hidden values for each layer, needed for steepest descent and conjugate gradient methods
-        hiddens = {}
-        hiddens[0] = inputs
-        for layer_num in range(1,self.num_layers+1): #will need for steepest descent for first direction
-            weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
-            weight_cur_layer_type = ''.join([weight_cur_layer,'_type'])
-            bias_cur_layer = ''.join(['bias',str(layer_num)])
-            hiddens[layer_num] = self.forward_layer(hiddens[layer_num-1], self.weights[weight_cur_layer], 
-                                                    self.weights[bias_cur_layer], self.weights[weight_cur_layer_type] )
-        return hiddens
-    def update_weights(self, step_size, direction):
-        #a pretty daft way of updating weights, since we have to store the entire direction (which is another copy of the weights),
-        #but this is probably a smart thing to do for conjugate gradient methods for which there is no structure to exploit
-        for layer_num in range(1,self.num_layers+1):
-            weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
-            bias_cur_layer = ''.join(['bias',str(layer_num)])
-            self.weights[weight_cur_layer] += step_size * direction[weight_cur_layer]
-            self.weights[bias_cur_layer] += step_size * direction[bias_cur_layer]
     def train(self): #completed
         if self.do_pretrain:
             self.pretrain()
@@ -504,12 +487,12 @@ class NN_Trainer(Neural_Network):
                 self.backprop_conjugate_gradient()
         self.write_weight_matrix()
     #pretraining functions
-    def backward_layer(self, hiddens, weights, biases, rbm_type): #completed
+    def backward_layer(self, hiddens, weights, biases, rbm_type): #completed, transpose expensive, should be compiled
         if rbm_type.split('_')[0] == 'gaussian':
             return self.weight_matrix_multiply(hiddens, numpy.transpose(weights), biases)
         else: #rbm_type is bernoulli
             return self.sigmoid(self.weight_matrix_multiply(hiddens, numpy.transpose(weights), biases))
-    def pretrain(self): #completed
+    def pretrain(self): #completed, weight updates expensive, should be compiled
         print "starting pretraining"
         learning_rate_index = 0;
         for layer_num in range(len(self.pretrain_iterations)):
@@ -551,7 +534,28 @@ class NN_Trainer(Neural_Network):
                 print "squared reconstuction error is", reconstruction_error
                 learning_rate_index += 1
     #fine-tuning/backprop functions
-    def backprop_steepest_descent(self): #running, but with math problem?... I think it's fixed
+    #currently implemented are stochastic/steepest descent
+    #and conjugate gradient methods
+    def forward_first_order_methods(self, inputs): #completed
+        #returns hidden values for each layer, needed for steepest descent and conjugate gradient methods
+        hiddens = {}
+        hiddens[0] = inputs
+        for layer_num in range(1,self.num_layers+1): #will need for steepest descent for first direction
+            weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
+            weight_cur_layer_type = ''.join([weight_cur_layer,'_type'])
+            bias_cur_layer = ''.join(['bias',str(layer_num)])
+            hiddens[layer_num] = self.forward_layer(hiddens[layer_num-1], self.weights[weight_cur_layer], 
+                                                    self.weights[bias_cur_layer], self.weights[weight_cur_layer_type] )
+        return hiddens
+    def update_weights(self, step_size, direction): #completed, expensive, should be compiled
+        #a pretty daft way of updating weights, since we have to store the entire direction (which is another copy of the weights),
+        #but this is probably a smart thing to do for conjugate gradient methods for which there is no structure to exploit
+        for layer_num in range(1,self.num_layers+1):
+            weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
+            bias_cur_layer = ''.join(['bias',str(layer_num)])
+            self.weights[weight_cur_layer] += step_size * direction[weight_cur_layer]
+            self.weights[bias_cur_layer] += step_size * direction[bias_cur_layer]
+    def backprop_steepest_descent(self): #completed, expensive, should be compiled
         print "starting backprop using steepest descent"
         batch_index = 0
         print "Number of layers is", self.num_layers
@@ -589,8 +593,6 @@ class NN_Trainer(Neural_Network):
                     
                     self.weights[weight_next_layer] += self.steepest_learning_rate[epoch_num] / batch_size * weight_update
                     self.weights[bias_next_layer] += self.steepest_learning_rate[epoch_num] / batch_size * bias_update
-                    #self.weights[weight_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
-                    #self.weights[bias_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * sum(weight_vec)
                     weight_update = numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
                     bias_update = sum(weight_vec)
                 #do final weight_update
@@ -601,13 +603,10 @@ class NN_Trainer(Neural_Network):
             sys.stdout.write("\r100.0% done\r")
             print "average cross entropy at the end of epoch is", cross_entropy / num_training_examples
             print "number correctly classified is", num_corr_classified, "of", num_training_examples
-    def backprop_conjugate_gradient(self): #Running... needs better interpolation methods
+    def backprop_conjugate_gradient(self): #Running... need preconditioners
         #in this framework "points" are self.weights
         #will also need to store CG-direction, which will be in dictionary conj_grad_dir
-        #num_batches = int(numpy.ceil(self.features.shape[0] / float(self.backprop_batch_size)))
         print "Starting backprop using conjugate gradient"
-        #print "With", self.conjugate_num_epochs, "epochs and", num_batches, "batches per epoch"
-        #print num_batches * "."
         print "Number of layers is", self.num_layers
         
         for epoch_num in range(self.conjugate_num_epochs):
@@ -620,7 +619,6 @@ class NN_Trainer(Neural_Network):
             while end_index < self.features.shape[0]: #run through the batches
                 per_done = float(batch_index)/self.features.shape[0]*100
                 sys.stdout.write("\r%.1f%% done" % per_done), sys.stdout.flush()
-                #sys.stdout.write("."), sys.stdout.flush()
                 end_index = min(batch_index+self.backprop_batch_size,self.features.shape[0])
                 batch_size = len(range(batch_index,end_index))
                 batch_inputs = self.features[batch_index:end_index]
@@ -630,8 +628,6 @@ class NN_Trainer(Neural_Network):
                 failed_line_search = False
                 conj_grad_dir = self.calculate_negative_gradient(batch_inputs, batch_labels) #steepest descent for first direction
                 old_gradient = conj_grad_dir
-                #init_step_size = 1000/4 / (1 + self.dot(conj_grad_dir, conj_grad_dir))
-                #print "max_step_size is", max_step_size
                 for _ in range(self.conjugate_max_iterations):
                     step_size = self.line_search(batch_inputs, batch_labels, conj_grad_dir, 
                                                  max_line_searches=self.conjugate_num_line_searches, 
@@ -666,7 +662,7 @@ class NN_Trainer(Neural_Network):
             sys.stdout.write("\r100.0% done\r")
             print "average cross entropy at the end of epoch is", cross_entropy / num_training_examples
             print "number correctly classified is", num_corr_classified, "of", num_training_examples
-    def calculate_conjugate_gradient_direction(self, batch_inputs, batch_labels, old_gradient, new_gradient, 
+    def calculate_conjugate_gradient_direction(self, batch_inputs, batch_labels, old_gradient, new_gradient, #needs preconditioners, expensive, should be compiled
                                                current_conjugate_gradient_direction, const_type='polak-ribiere'):
         new_conjugate_gradient_direction = {}
         if const_type == 'polak-ribiere':
@@ -688,7 +684,7 @@ class NN_Trainer(Neural_Network):
             new_conjugate_gradient_direction[bias_cur_layer] = -new_gradient[bias_cur_layer] + cg_const * current_conjugate_gradient_direction[bias_cur_layer]
         
         return new_conjugate_gradient_direction
-    def calculate_gradient(self, batch_inputs, batch_labels): #want to make this more general to handle arbitrary loss functions, structures
+    def calculate_gradient(self, batch_inputs, batch_labels): #want to make this more general to handle arbitrary loss functions, structures, expensive, should be compiled
         gradient = {}
         batch_size = batch_labels.size
         
@@ -716,7 +712,7 @@ class NN_Trainer(Neural_Network):
             gradient[bias_cur_layer] = sum(weight_vec)
         
         return gradient
-    def calculate_negative_gradient(self, batch_inputs, batch_labels):
+    def calculate_negative_gradient(self, batch_inputs, batch_labels): #completed
         negative_gradient = self.calculate_gradient(batch_inputs, batch_labels)
         for layer_num in range(1, self.num_layers+1):
             weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
@@ -725,7 +721,7 @@ class NN_Trainer(Neural_Network):
             negative_gradient[bias_cur_layer] *= -1
         
         return negative_gradient
-    def dot(self, weight1, weight2): #completed in theory
+    def dot(self, weight1, weight2): #completed, way expensive, should be compiled
         #An abuse of terminology, I consider two weight dictionaries to be weight vectors, 
         #so dot produces the "dot product" of the two weight dictionaries
         return_val = 0
@@ -735,8 +731,17 @@ class NN_Trainer(Neural_Network):
             return_val += numpy.sum(weight1[weight_cur_layer] * weight2[weight_cur_layer])
             return_val += numpy.sum(weight1[bias_cur_layer] * weight2[bias_cur_layer])
         return return_val
-    def line_search(self, batch_inputs, batch_labels, direction, max_step_size=0.1,
-                    max_line_searches=20, zero_step_directional_derivative=None):
+    def norm(self, weight):
+        #returns normed value of weight
+        norm_val = numpy.sqrt(self.dot(weight, weight))
+        for layer_num in range(1,self.num_layers+1):
+            weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
+            bias_cur_layer = ''.join(['bias',str(layer_num)])
+            weight[weight_cur_layer] /= norm_val
+            weight[bias_cur_layer] /= norm_val
+        return weight
+    def line_search(self, batch_inputs, batch_labels, direction, max_step_size=0.1, #completed, way expensive, should be compiled
+                    max_line_searches=20, zero_step_directional_derivative=None): 
         # the line search algorithm is basically as follows
         # we have directional derivative of p_k at cross_entropy(0), in gradient_direction, c_1, and c_2, and stepsize_max, current cross-entropy in batch
         # choose stepsize to be between 0 and stepsize_max (usually by finding minimum or quadratic, cubic, or quartic function)
@@ -807,19 +812,6 @@ class NN_Trainer(Neural_Network):
             else: #satisfies Armijo rule, but not 2nd Wolfe condition, so go out further
                 #print "satisfied Armijo, but not Wolfe, so increasing step size. Current loss is", zero_step_loss, "and proposed loss is", proposed_loss
                 #print "derivative of step size is", proposed_directional_derivative, "current derivative is", cur_directional_derivative
-                #extrapolated_step_size = proposed_step_size * max_step_size_jump #need to change to another interpolation method
-                #print "extrapolated step size", extrapolated_step_size
-                #a = 6 * (prev_loss - proposed_loss) + 3 * (prev_directional_derivative + proposed_directional_derivative) * (proposed_step_size - prev_step_size)
-                #b = 3 * (proposed_loss - prev_loss) - (2 * prev_directional_derivative + proposed_directional_derivative) * (proposed_step_size - prev_step_size)
-                #extrapolated_step_size = prev_step_size - prev_directional_derivative * (proposed_step_size - prev_step_size) ** 2 / (b + numpy.sqrt(b**2 - a * prev_directional_derivative * (proposed_step_size - prev_step_size)))
-                #if math.isnan(extrapolated_step_size) or math.isinf(extrapolated_step_size): #numerical problem
-                #    print "numerical issue with extrapolation, so extrapolating max amount"
-                #    extrapolated_step_size = max_step_size_jump * prev_step_size
-                #elif extrapolated_step_size > max_step_size_jump * prev_step_size: #went out too far
-                #    extrapolated_step_size = max_step_size_jump * prev_step_size
-                #elif (extrapolated_step_size - proposed_step_size) / (proposed_step_size - prev_step_size) < min_step_size_jump:
-                    #print "step size too close, moving step size out"
-                #    extrapolated_step_size = proposed_step_size + (proposed_step_size - prev_step_size) * min_step_size_jump
                 prev_step_size = proposed_step_size
                 prev_loss = proposed_loss
                 prev_directional_derivative = proposed_directional_derivative
@@ -867,16 +859,75 @@ class NN_Trainer(Neural_Network):
     def interpolate_step_size(self, p1, p2):
         #p1 and p2 are tuples in form (x,f(x), f'(x)) and spits out minimum step size based on cubic interpolation of data
         if abs(p2[0] - p1[0]) < 1E-4:
-            print "difference between two step sizes is small |p2 -p1|", abs(p2[0] - p1[0]), "returning bisect"
+            #print "difference between two step sizes is small. |p2 -p1| =", abs(p2[0] - p1[0]), "returning bisect"
             return (p1[0] + p2[0]) / 2
         b = (3 * (p2[1] - p1[1]) - (2 * p1[2] + p2[2])*(p2[0] - p1[0])) / (p2[0] - p1[0])**2
         a = (-2 * (p2[1] - p1[1]) + (p1[2] + p2[2])*(p2[0] - p1[0])) / (p2[0] - p1[0])**3
-        if b**2 > 3 * a * p1[2] and math.isinf(a) == False and math.isnan(a) == False: #cubic interp
+        if b**2 > 3 * a * p1[2]: #cubic interp
             return p1[0] + (-b + numpy.sqrt(b**2 - 3 * a * p1[2])) / (3 * a)
         elif b != 0: #quadratic interp
             return p1[0] - p1[2] / (2 * b)
         else: #bisect
             return (p1[0] + p2[0]) / 2
+    def backprop_krylov_subspace(self):
+        pass
+    def calculate_krylov_basis(self, batch_inputs, batch_labels, prev_direction): 
+        krylov_basis = {} #dictionary of weights, "directions" are weights
+        #will need to add preconditioning at some point
+        krylov_basis[0] = self.norm(self.calculate_gradient(batch_inputs, batch_labels)) #normed gradient for first direction
+        bfgs_hessian = numpy.zeros((self.num_krylov_directions+1,self.num_krylov_directions+1))
+        for layer_num in range(1,self.num_krylov_directions+1):
+            if layer_num < self.num_krylov_directions:
+                gauss_newton_direction = self.calculate_gauss_newton_direction(batch_inputs, krylov_basis[layer_num-1])
+                #will have to add preconditioning here
+            else:
+                gauss_newton_direction = prev_direction
+            for hessian_idx in range(layer_num+1):
+                bfgs_hessian[(hessian_idx,layer_num)] = self.dot(gauss_newton_direction, krylov_basis[hessian_idx])
+                bfgs_hessian[(layer_num,hessian_idx)] = bfgs_hessian[(hessian_idx,layer_num)]
+                gauss_newton_direction = self.orthonalize_direction(gauss_newton_direction, krylov_basis[hessian_idx])
+            krylov_basis[layer_num] = self.norm(gauss_newton_direction)
+        krylov_basis['hessian'] = bfgs_hessian
+        return krylov_basis
+    def orthonalize_direction(self, original_weight, projected_dir): #expensive, should be compiled
+        orthoged_weight = {}
+        orthog_const = self.dot(original_weight, projected_dir)
+        for layer_num in range(1,self.num_layers+1):
+            weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
+            bias_cur_layer = ''.join(['bias',str(layer_num)])
+            orthoged_weight[weight_cur_layer] = original_weight[weight_cur_layer] - orthog_const * projected_dir[weight_cur_layer]
+            orthoged_weight[bias_cur_layer] = original_weight[bias_cur_layer] - orthog_const * projected_dir[bias_cur_layer]
+        return orthoged_weight
+    def calculate_gauss_newton_direction(self, inputs, direction): #completed, need to test, expensive, should be compiled
+        #given direction, calculates out_direction = G * direction, where G is the Gauss-Newton Matrix
+        hiddens = self.forward_first_order_methods(inputs)
+        cur_layer_lin_grad = self.weight_matrix_multiply(inputs, direction['weights01'], direction['bias1']) #ndata x n_hid
+        cur_layer_deriv = hiddens[1] * (1-hiddens[1]) * cur_layer_lin_grad
+        for idx in range(1,self.num_layers):
+            weight_cur_layer = ''.join(['weights',str(idx),str(idx+1)])
+            bias_cur_layer = ''.join(['bias',str(idx+1)])
+            cur_layer_lin_grad = self.weight_matrix_multiply(cur_layer_deriv, self.weights[weight_cur_layer], self.weights[bias_cur_layer])
+            cur_layer_lin_grad += self.weight_matrix_multiply(hiddens[idx+1], direction[weight_cur_layer], direction[bias_cur_layer])
+            cur_layer_deriv = hiddens[idx+1] * (1-hiddens[idx+1]) * cur_layer_lin_grad
+        #so hiddens[self.num_layers] is ndata x n_out, and cur_layer_deriv is n_data x n_out
+        average_output = numpy.sum(hiddens[self.num_layers],axis=0)# 1 x n_out
+        average_output_deriv = numpy.sum(cur_layer_deriv, axis=0) #1 x n_out
+        cur_layer_second_deriv = numpy.transpose(average_output * (average_output_deriv - numpy.dot(average_output, average_output_deriv))) #n_out x 1
+        out_direction = {}
+        for layer_num in range(self.num_layers-1,0,-1):
+            weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
+            weight_next_layer = ''.join(['weights',str(layer_num),str(layer_num+1)])
+            bias_cur_layer = ''.join(['bias',str(layer_num)])
+            bias_next_layer = ''.join(['bias',str(layer_num+1)])
+            hidden_second_deriv = cur_layer_second_deriv * hiddens[layer_num+1] * (1 - hiddens[layer_num+1])
+            cur_layer_second_deriv = numpy.dot(hidden_second_deriv, numpy.transpose(self.weights[weight_next_layer]))
+            out_direction[weight_next_layer] = numpy.outer(hidden_second_deriv, cur_layer_second_deriv)
+            out_direction[bias_next_layer] = numpy.sum(out_direction[weight_next_layer]) #not sure if this is right
+        return out_direction
+    def bfgs(self):
+        pass
+    #weight matrix handling functions
+    #own read weight, write weights, and init weights
     def open_weight_matrix(self): #completed
         extra_keys = 0
         try:    
@@ -901,7 +952,7 @@ class NN_Trainer(Neural_Network):
                 weight_cur_layer_type = ''.join([weight_cur_layer, '_type'])
                 self.weights[weight_cur_layer_type] = self.weights[weight_cur_layer_type][0].encode('ascii', 'ignore')
             self.check_weights()
-    def init_weight_matrix(self): #completed
+    def init_weight_matrix(self): #completed, expensive, should be compiled
         self.weights = {}
         self.num_layers = len(self.architecture)
         initial_bias_range = self.initial_bias_max - self.initial_bias_min

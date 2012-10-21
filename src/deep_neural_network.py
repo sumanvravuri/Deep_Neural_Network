@@ -18,6 +18,7 @@ import sys
 import numpy
 import scipy.io as sp
 import math
+import copy
 
 class Vector_Math:
     #math functions
@@ -34,19 +35,24 @@ class Vector_Math:
         return numpy.dot(inputs,weights)+numpy.tile(biases, (inputs.shape[0],1))
 
 class Neural_Network_Weight(object):
-    def __init__(self):
+    def __init__(self,num_layers=0, weights={}, bias={}, weight_type={}):
         #num_layers
         #weights - actual Neural Network weights, a dictionary with keys corresponding to layer, ie. weights['01'], weights['12'], etc. each numpy array
         #bias - NN biases, again a dictionary stored as bias['0'], bias['1'], bias['2'], etc.
         #weight_type - optional command indexed by same keys weights, possible optionals are 'rbm_gaussian_bernoullli', 'rbm_bernoulli_bernoulli', 'logistic', 'convolutional', or 'pooling'
-        self.num_layers = 0
         self.valid_layer_types = {}
         self.valid_layer_types['all'] = ['rbm_gaussian_bernoulli', 'rbm_bernoulli_bernoulli', 'logistic', 'convolutional', 'pooling']
         self.valid_layer_types['intermediate'] = ['rbm_gaussian_bernoulli', 'rbm_bernoulli_bernoulli', 'convolutional', 'pooling']
         self.valid_layer_types['last'] = ['rbm_gaussian_bernoulli', 'rbm_bernoulli_bernoulli', 'logistic']
-        self.weights = {}
-        self.bias = {}
-        self.weight_type = {}
+        self.num_layers = num_layers
+        self.weights = weights
+        self.bias = bias
+        self.weight_type = weight_type
+    def clear(self):
+        self.num_layers = 0
+        self.weights.clear()
+        self.bias.clear()
+        self.weight_type.clear()
     def dot(self, nn_weight2, excluded_keys = {'bias': [], 'weights': []}):
         if type(nn_weight2) is not Neural_Network_Weight:
             print "argument must be of type Neural_Network_Weight... instead of type", type(nn_weight2), "Exiting now..."
@@ -259,7 +265,7 @@ class Neural_Network_Weight(object):
             sys.exit()
         nn_output = Neural_Network_Weight()
         nn_output.num_layers = self.num_layers
-        nn_output.weight_type = self.weight_type #is a shallow copy... should I make it a deep copy
+        nn_output.weight_type = copy.deepcopy(self.weight_type)
         for key in self.bias.keys():
             nn_output.bias[key] = self.bias[key] + nn_weight2.bias[key]
         for key in self.weights.keys():
@@ -274,30 +280,60 @@ class Neural_Network_Weight(object):
             sys.exit()
         nn_output = Neural_Network_Weight()
         nn_output.num_layers = self.num_layers
-        nn_output.weight_type = self.weight_type #is a shallow copy... should I make it a deep copy
+        nn_output.weight_type = copy.deepcopy(self.weight_type) #is a shallow copy... should I make it a deep copy
         for key in self.bias.keys():
             nn_output.bias[key] = self.bias[key] - nn_weight2.bias[key]
         for key in self.weights.keys():
             nn_output.weights[key] = self.weights[key] - nn_weight2.weights[key]
         return nn_output
     def __mul__(self, scalar):
-        if type(scalar) is not float or type(scalar) is not int:
-            print "Multiplication must be by a float or int. Instead it is type", type(scalar), "Exiting now"
-            sys.exit()
+        #if type(scalar) is not float and type(scalar) is not int:
+        #    print "__mul__ must be by a float or int. Instead it is type", type(scalar), "Exiting now"
+        #    sys.exit()
         scalar = float(scalar)
+        nn_output = Neural_Network_Weight()
+        nn_output.num_layers = self.num_layers
+        nn_output.weight_type = copy.deepcopy(self.weight_type)
         for key in self.bias.keys():
-            self.bias[key] *= scalar
+            nn_output.bias[key] = self.bias[key] * scalar
         for key in self.weights.keys():
-            self.weights[key] *= scalar
+            nn_output.weights[key] = self.weights[key] * scalar
+        return nn_output
     def __div__(self, scalar):
-        if type(scalar) is not float or type(scalar) is not int:
+        if type(scalar) is not float and type(scalar) is not int:
             print "Divide must be by a float or int. Instead it is type", type(scalar), "Exiting now"
             sys.exit()
         self.__mul__(1./scalar)
-    def __imul__(self, scalar):
-        if type(scalar) is not float or type(scalar) is not int:
-            print "Multiplication must be by a float or int. Instead it is type", type(scalar), "Exiting now"
+    def __iadd__(self, nn_weight2):
+        if type(nn_weight2) is not Neural_Network_Weight:
+            print "argument must be of type Neural_Network_Weight... instead of type", type(nn_weight2), "Exiting now..."
             sys.exit()
+        if self.get_architecture() != nn_weight2.get_architecture():
+            print "Neural net models do not match... Exiting now"
+            sys.exit()
+
+        for key in self.bias.keys():
+            self.bias[key] += nn_weight2.bias[key]
+        for key in self.weights.keys():
+            self.weights[key] += nn_weight2.weights[key]
+        return self
+    def __isub__(self, nn_weight2):
+        if type(nn_weight2) is not Neural_Network_Weight:
+            print "argument must be of type Neural_Network_Weight... instead of type", type(nn_weight2), "Exiting now..."
+            sys.exit()
+        if self.get_architecture() != nn_weight2.get_architecture():
+            print "Neural net models do not match... Exiting now"
+            sys.exit()
+
+        for key in self.bias.keys():
+            self.bias[key] -= nn_weight2.bias[key]
+        for key in self.weights.keys():
+            self.weights[key] -= nn_weight2.weights[key]
+        return self
+    def __imul__(self, scalar):
+        #if type(scalar) is not float and type(scalar) is not int:
+        #    print "__imul__ must be by a float or int. Instead it is type", type(scalar), "Exiting now"
+        #    sys.exit()
         scalar = float(scalar)
         for key in self.bias.keys():
             self.bias[key] *= scalar
@@ -305,11 +341,15 @@ class Neural_Network_Weight(object):
             self.weights[key] *= scalar
         return self
     def __idiv__(self, scalar):
-        if type(scalar) is not float or type(scalar) is not int:
+        if type(scalar) is not float and type(scalar) is not int:
             print "Divide must be by a float or int. Instead it is type", type(scalar), "Exiting now"
             sys.exit()
         self.__imul__(1./scalar)
-
+    def __copy__(self):
+        return Neural_Network_Weight(self.num_layers, self.weights, self.bias, self.weight_type)
+    def __deepcopy__(self, memo):
+        return Neural_Network_Weight(copy.deepcopy(self.num_layers, memo), copy.deepcopy(self.weights,memo), 
+                                     copy.deepcopy(self.bias,memo), copy.deepcopy(self.weight_type,memo))
 
 class Neural_Network(object, Vector_Math):
     #features are stored in format ndata x nvis
@@ -786,8 +826,10 @@ class NN_Trainer(Neural_Network):
         #in this framework "points" are self.weights
         #will also need to store CG-direction, which will be in dictionary conj_grad_dir
         print "Starting backprop using conjugate gradient"
-        print "Number of layers is", self.num_layers
-        
+        print "Number of layers is", self.model.num_layers
+        #we have three new gradients now: conjugate_gradient_dir, old_gradient, and new_gradient
+        #conj_grad_dir = copy.deepcopy(self.model)
+        excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
         for epoch_num in range(self.conjugate_num_epochs):
             print "Epoch", epoch_num+1, "of", self.conjugate_num_epochs
             cross_entropy = 0
@@ -805,30 +847,32 @@ class NN_Trainer(Neural_Network):
                 
                 ########## perform conjugate gradient on the batch ########################
                 failed_line_search = False
-                conj_grad_dir = self.calculate_negative_gradient(batch_inputs, batch_labels) #steepest descent for first direction
-                old_gradient = conj_grad_dir
+                conj_grad_dir = -self.calculate_gradient(batch_inputs, batch_labels) #steepest descent for first direction
+                old_gradient = copy.deepcopy(conj_grad_dir)
+                new_gradient = copy.deepcopy(conj_grad_dir)
                 for _ in range(self.conjugate_max_iterations):
-                    step_size = self.line_search(batch_inputs, batch_labels, conj_grad_dir, 
-                                                 max_line_searches=self.conjugate_num_line_searches, 
-                                                 zero_step_directional_derivative=-self.dot(old_gradient, conj_grad_dir))
+                    step_size = self.line_search_and_update(batch_inputs, batch_labels, conj_grad_dir, 
+                                                            max_line_searches=self.conjugate_num_line_searches,
+                                                            zero_step_directional_derivative=-conj_grad_dir.dot(old_gradient, excluded_keys))
                     if step_size > 0: #line search did not fail
                         #no need to update weights here, because we've been updating it during the line search
                         failed_line_search = False
                         #update search direction
                         new_gradient = self.calculate_gradient(batch_inputs, batch_labels)
-                        conj_grad_dir = self.calculate_conjugate_gradient_direction(batch_inputs, batch_labels, old_gradient, new_gradient, conj_grad_dir, 
-                                                                                    const_type=self.conjugate_const_type)
-                        del old_gradient
-                        old_gradient = new_gradient
-                        del new_gradient
-                        if self.dot(conj_grad_dir, conj_grad_dir) > 0: #conjugate gradient direction not a descent direction, switching to steepest descent
-                            conj_grad_dir = self.calculate_negative_gradient(batch_inputs, batch_labels)
-                            old_gradient = conj_grad_dir
+                        conj_grad_dir = self.calculate_conjugate_gradient_direction(batch_inputs, batch_labels, old_gradient, new_gradient, 
+                                                                                    conj_grad_dir, const_type=self.conjugate_const_type)
+                        old_gradient.clear()
+                        old_gradient = copy.deepcopy(new_gradient)
+                        new_gradient.clear()
+                        if old_gradient.dot(conj_grad_dir, excluded_keys) > 0: #conjugate gradient direction not a descent direction, switching to steepest descent
+                            print "\rCalculated conjugate direction not a descent direction, switching direction to negative gradient"
+                            conj_grad_dir = -self.calculate_gradient(batch_inputs, batch_labels)
+                            old_gradient = copy.deepcopy(conj_grad_dir)
                     else: #line search failed
                         if failed_line_search: #failed line search twice in a row, so bail
                             break
                         failed_line_search = True
-                        conj_grad_dir = self.calculate_negative_gradient(batch_inputs, batch_labels)
+                        conj_grad_dir = -self.calculate_gradient(batch_inputs, batch_labels)
                         old_gradient = conj_grad_dir
                 ###########end conjugate gradient batch ####################################
                 
@@ -843,52 +887,49 @@ class NN_Trainer(Neural_Network):
             print "number correctly classified is", num_corr_classified, "of", num_training_examples
     def calculate_conjugate_gradient_direction(self, batch_inputs, batch_labels, old_gradient, new_gradient, #needs preconditioners, expensive, should be compiled
                                                current_conjugate_gradient_direction, const_type='polak-ribiere'):
-        new_conjugate_gradient_direction = {}
-        if const_type == 'polak-ribiere':
-            cg_const = (self.dot(new_gradient, new_gradient) - self.dot(new_gradient,old_gradient)) / self.dot(old_gradient, old_gradient)
+        excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
+        if const_type == 'polak-ribiere' or const_type == 'polak-ribiere+':
+            cg_const = new_gradient.dot(new_gradient - old_gradient, excluded_keys) / old_gradient.norm(excluded_keys)**2
+            if const_type == 'polak-ribiere+':
+                cg_const = max(cg_const, 0)
         elif const_type == 'fletcher-reeves':
-            cg_const = self.dot(new_gradient, new_gradient) / self.dot(old_gradient, old_gradient)
-        elif const_type == 'polak-ribiere+':
-            cg_const = max((self.dot(new_gradient, new_gradient) - self.dot(new_gradient,old_gradient)) / self.dot(old_gradient, old_gradient),0)
+            cg_const = new_gradient.norm(excluded_keys)**2 / old_gradient.norm(excluded_keys)**2
         elif const_type == 'hestenes-stiefel': #might run into numerical stability issues
-            cg_const = (self.dot(new_gradient, new_gradient) - self.dot(new_gradient, old_gradient)) / max((self.dot(new_gradient, current_conjugate_gradient_direction) - self.dot(old_gradient, current_conjugate_gradient_direction)), 1E-4)
+            cg_const = new_gradient.dot(new_gradient - old_gradient, excluded_keys) / max(current_conjugate_gradient_direction.dot(new_gradient - old_gradient, excluded_keys), 1E-4)
         else:
             print const_type, "not recognized, the only valid methods of \'polak-ribiere\', \'fletcher-reeves\', \'polak-ribiere+\', \'hestenes-stiefel\'... Exiting now"
             sys.exit()
         
-        for layer_num in range(1,self.num_layers+1):
-            weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
-            bias_cur_layer = ''.join(['bias',str(layer_num)])
-            new_conjugate_gradient_direction[weight_cur_layer] = -new_gradient[weight_cur_layer] + cg_const * current_conjugate_gradient_direction[weight_cur_layer]
-            new_conjugate_gradient_direction[bias_cur_layer] = -new_gradient[bias_cur_layer] + cg_const * current_conjugate_gradient_direction[bias_cur_layer]
-        
-        return new_conjugate_gradient_direction
-    def calculate_gradient(self, batch_inputs, batch_labels): #want to make this more general to handle arbitrary loss functions, structures, expensive, should be compiled
-        gradient = {}
-        batch_size = batch_labels.size
+        return -new_gradient + current_conjugate_gradient_direction * cg_const
+    def calculate_gradient(self, batch_inputs, batch_labels, model=None): #want to make this more general to handle arbitrary loss functions, structures, expensive, should be compiled
+        #calculate gradient with particular Neural Network model. If None is specified, will use current weights (i.e., self.model)
+        if model == None:
+            model = self.model
+        gradient = Neural_Network_Weight(num_layers=model.num_layers, weight_type=copy.deepcopy(model.weight_type))
+        batch_size = batch_inputs.shape[0]
         
         hiddens = self.forward_first_order_methods(batch_inputs)
         
         #derivative of log(cross-entropy softmax)
-        weight_vec = hiddens[self.num_layers] #batchsize x n_outputs
+        weight_vec = hiddens[model.num_layers] #batchsize x n_outputs
         for index in range(batch_size):
             weight_vec[index, batch_labels[index]] -= 1
         
         #average layers in batch
-        weight_cur_layer = ''.join(['weights',str(self.num_layers-1),str(self.num_layers)])
-        bias_cur_layer = ''.join(['bias',str(self.num_layers)])
-        gradient[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[self.num_layers-1]), weight_vec) 
-        gradient[bias_cur_layer] = sum(weight_vec)
+        weight_cur_layer = ''.join([str(model.num_layers-1),str(model.num_layers)])
+        bias_cur_layer = str(model.num_layers)
+        gradient.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[model.num_layers-1]), weight_vec) 
+        gradient.bias[bias_cur_layer] = sum(weight_vec)
         
         #propagate to sigmoid layers
-        for layer_num in range(self.num_layers-1,0,-1):
-            weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
-            weight_next_layer = ''.join(['weights',str(layer_num),str(layer_num+1)])
-            bias_cur_layer = ''.join(['bias',str(layer_num)])
-            weight_vec = numpy.dot(weight_vec, numpy.transpose(self.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out)
+        for layer_num in range(model.num_layers-1,0,-1):
+            weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
+            weight_next_layer = ''.join([str(layer_num),str(layer_num+1)])
+            bias_cur_layer = str(layer_num)
+            weight_vec = numpy.dot(weight_vec, numpy.transpose(model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out)
 
-            gradient[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
-            gradient[bias_cur_layer] = sum(weight_vec)
+            gradient.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
+            gradient.bias[bias_cur_layer] = sum(weight_vec)
         
         return gradient
     def calculate_negative_gradient(self, batch_inputs, batch_labels): #completed
@@ -919,8 +960,8 @@ class NN_Trainer(Neural_Network):
             weight[weight_cur_layer] /= norm_val
             weight[bias_cur_layer] /= norm_val
         return weight
-    def line_search(self, batch_inputs, batch_labels, direction, max_step_size=0.1, #completed, way expensive, should be compiled
-                    max_line_searches=20, zero_step_directional_derivative=None): 
+    def line_search_and_update(self, batch_inputs, batch_labels, direction, max_step_size=0.1, #completed, way expensive, should be compiled
+                               max_line_searches=20, zero_step_directional_derivative=None): 
         # the line search algorithm is basically as follows
         # we have directional derivative of p_k at cross_entropy(0), in gradient_direction, c_1, and c_2, and stepsize_max, current cross-entropy in batch
         # choose stepsize to be between 0 and stepsize_max (usually by finding minimum or quadratic, cubic, or quartic function)
@@ -939,9 +980,11 @@ class NN_Trainer(Neural_Network):
         #     otherwise we essentially didn't go far enough with our step size, so find step_size between current_stepsize and max_stepsize
         c_1 = 1E-4
         c_2 = 0.9
+        excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
         zero_step_loss = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False), batch_labels) #\phi_0
-        if zero_step_directional_derivative is None: #no need to calculation directional derivative if already passed
-            zero_step_directional_derivative = self.dot(self.calculate_gradient(batch_inputs, batch_labels), direction)
+        if zero_step_directional_derivative is None:
+            gradient = self.calculate_gradient(batch_inputs, batch_labels)
+            zero_step_directional_derivative = gradient.dot(direction, excluded_keys)
 
         proposed_step_size = max_step_size / 2
         prev_step_size = 0
@@ -954,10 +997,15 @@ class NN_Trainer(Neural_Network):
         for num_line_searches in range(1,max_line_searches+1): #looking for brackets
             #update weights
             #print proposed_step_size, ",", prev_step_size, ",", zero_step_loss, ",",
-            self.update_weights(proposed_step_size - prev_step_size, direction)
+            #self.update_weights(proposed_step_size - prev_step_size, direction)
+            self.model += direction * (proposed_step_size - prev_step_size)
+            #print type(direction * (proposed_step_size - prev_step_size))
+            #print type(self.model)
             overall_step_size += proposed_step_size - prev_step_size #keep track of where we moved along the line search
             proposed_loss = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False), batch_labels)
             #print proposed_loss
+            print "current stepsize is", overall_step_size, "with proposed_loss", proposed_loss, "and zero_step_loss", zero_step_loss
+            print "zero_step_directional_derivative", zero_step_directional_derivative, "proposed_step_size", proposed_step_size
             if math.isinf(proposed_loss) or math.isnan(proposed_loss): #numerical stability issues
                 print "have numerical stability issues, so decreasing step size by 1/2"
                 prev_step_size = proposed_step_size #restore weights
@@ -968,13 +1016,13 @@ class NN_Trainer(Neural_Network):
                 #print "Armijo rule failed, so generating brackets"
                 upper_bracket = proposed_step_size
                 upper_bracket_loss = proposed_loss
-                upper_bracket_deriv = self.dot(self.calculate_gradient(batch_inputs, batch_labels), direction)
+                upper_bracket_deriv = direction.dot(self.calculate_gradient(batch_inputs, batch_labels), excluded_keys)
                 lower_bracket = prev_step_size
                 lower_bracket_loss = prev_loss
                 lower_bracket_deriv = prev_directional_derivative
                 prev_step_size = proposed_step_size
                 break
-            proposed_directional_derivative = self.dot(self.calculate_gradient(batch_inputs, batch_labels), direction)
+            proposed_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels), excluded_keys)
             if abs(proposed_directional_derivative) <= -c_2 * zero_step_directional_derivative: #satisfies strong Wolfe condition
                 #print "Wolfe conditions satisfied"
                 return proposed_step_size
@@ -1004,12 +1052,15 @@ class NN_Trainer(Neural_Network):
             proposed_step_size = self.interpolate_step_size((upper_bracket, upper_bracket_loss, upper_bracket_deriv),
                                                         (lower_bracket, lower_bracket_loss, lower_bracket_deriv))#(upper_bracket + lower_bracket) / 2 #need to change to another interpolation method
             #print "proposed step size is", proposed_step_size, "while upper bracket is", upper_bracket, "and lower bracket is", lower_bracket
-            self.update_weights(proposed_step_size - prev_step_size, direction)
+            #self.update_weights(proposed_step_size - prev_step_size, direction)
+            self.model += direction * (proposed_step_size - prev_step_size)
             overall_step_size += proposed_step_size - prev_step_size
+            print "current stepsize is", overall_step_size, "with proposed_loss", proposed_loss, "and zero_step_loss", zero_step_loss
             proposed_loss = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False), batch_labels)
-            proposed_directional_derivative = self.dot(self.calculate_gradient(batch_inputs, batch_labels), direction)
-            #print "proposed loss is", proposed_loss, "and dir_deriv", proposed_directional_derivative
-            #print "zero_step_dir_deriv", zero_step_directional_derivative
+            proposed_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels), excluded_keys)
+            print "proposed loss is", proposed_loss, "and dir_deriv", proposed_directional_derivative
+            print "zero_step_dir_deriv", zero_step_directional_derivative
+            print "proposed loss needs to beat", zero_step_loss + c_1 * proposed_step_size * zero_step_directional_derivative
             if proposed_loss > zero_step_loss + c_1 * proposed_step_size * zero_step_directional_derivative:
                 #print "Armijo rule failed, adjusting brackets"
                 upper_bracket = proposed_step_size
@@ -1018,6 +1069,7 @@ class NN_Trainer(Neural_Network):
                 prev_step_size = proposed_step_size
             else:
                 #print "Armijo rule satisfied"
+                print "checking 2nd Wolfe condition with", -c_2 * zero_step_directional_derivative
                 if abs(proposed_directional_derivative) <= -c_2 * zero_step_directional_derivative: #satisfies strong Wolfe condition
                     #print "Satisfied Wolfe conditions, step size is", proposed_step_size
                     return proposed_step_size
@@ -1033,7 +1085,8 @@ class NN_Trainer(Neural_Network):
         
         #if we made it this far, we ran out of line searches and line_search failed
         print "\nline search failed, so restoring weights..."
-        self.update_weights(-overall_step_size, direction) #restore previous weights
+        #self.update_weights(-overall_step_size, direction) #restore previous weights
+        self.model -= direction * overall_step_size
         return 0 #line search failed
     def interpolate_step_size(self, p1, p2):
         #p1 and p2 are tuples in form (x,f(x), f'(x)) and spits out minimum step size based on cubic interpolation of data

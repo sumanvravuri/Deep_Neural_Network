@@ -62,6 +62,9 @@ class Neural_Network_Weight(object):
             if key in excluded_keys['bias']:
                 continue
             return_val += numpy.sum(self.bias[key] * nn_weight2.bias[key])
+            print "self bias max for key", key, "is", numpy.max(self.bias[key])
+            print "nn_weight2 bias max for key", key, "is", numpy.max(nn_weight2.bias[key])
+        print "return_val after biases is", return_val
         for key in self.weights.keys():
             if key in excluded_keys['weights']:
                 continue
@@ -851,6 +854,8 @@ class NN_Trainer(Neural_Network):
                 old_gradient = copy.deepcopy(conj_grad_dir)
                 new_gradient = copy.deepcopy(conj_grad_dir)
                 for _ in range(self.conjugate_max_iterations):
+                    print "dotting before line search"
+                    -conj_grad_dir.dot(old_gradient, excluded_keys)
                     step_size = self.line_search_and_update(batch_inputs, batch_labels, conj_grad_dir, 
                                                             max_line_searches=self.conjugate_num_line_searches,
                                                             zero_step_directional_derivative=-conj_grad_dir.dot(old_gradient, excluded_keys))
@@ -909,9 +914,10 @@ class NN_Trainer(Neural_Network):
         batch_size = batch_inputs.shape[0]
         
         hiddens = self.forward_first_order_methods(batch_inputs)
-        
+        print "calculating gradient, with batch size", batch_size
         #derivative of log(cross-entropy softmax)
         weight_vec = hiddens[model.num_layers] #batchsize x n_outputs
+        print "max of hidden layers of", model.num_layers, "is", numpy.max(hiddens[model.num_layers]), "of", hiddens[model.num_layers].size
         for index in range(batch_size):
             weight_vec[index, batch_labels[index]] -= 1
         
@@ -925,6 +931,7 @@ class NN_Trainer(Neural_Network):
         for layer_num in range(model.num_layers-1,0,-1):
             weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
             weight_next_layer = ''.join([str(layer_num),str(layer_num+1)])
+            print "max of hidden layers in", layer_num, "is", numpy.max(hiddens[layer_num]), "of", hiddens[layer_num].size
             bias_cur_layer = str(layer_num)
             weight_vec = numpy.dot(weight_vec, numpy.transpose(model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out)
 

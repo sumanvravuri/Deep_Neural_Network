@@ -19,7 +19,299 @@ import numpy
 import scipy.io as sp
 import math
 
-class Neural_Network(object):
+class Vector_Math:
+    #math functions
+    def sigmoid(self,inputs): #completed, expensive, should be compiled
+        return 1./(1+numpy.exp(-inputs)) #1/(1+e^-X)
+    def softmax(self, inputs): #completed, expensive, should be compiled
+        #subtracting max value of each data point below for numerical stability
+        exp_inputs = numpy.exp(inputs - numpy.transpose(numpy.tile(numpy.max(inputs,axis=1), (inputs.shape[1],1))))
+        return exp_inputs / numpy.transpose(numpy.tile(numpy.sum(exp_inputs, axis=1), (exp_inputs.shape[1],1)))
+    def weight_matrix_multiply(self,inputs,weights,biases): #completed, expensive, should be compiled
+        #print "input dims are ", inputs.shape
+        #print "weight dims are ", weights.shape
+        #print "bias dims are ", biases.shape
+        return numpy.dot(inputs,weights)+numpy.tile(biases, (inputs.shape[0],1))
+
+class Neural_Network_Weight(object):
+    def __init__(self):
+        #num_layers
+        #weights - actual Neural Network weights, a dictionary with keys corresponding to layer, ie. weights['01'], weights['12'], etc. each numpy array
+        #bias - NN biases, again a dictionary stored as bias['0'], bias['1'], bias['2'], etc.
+        #weight_type - optional command indexed by same keys weights, possible optionals are 'rbm_gaussian_bernoullli', 'rbm_bernoulli_bernoulli', 'logistic', 'convolutional', or 'pooling'
+        self.num_layers = 0
+        self.valid_layer_types = {}
+        self.valid_layer_types['all'] = ['rbm_gaussian_bernoulli', 'rbm_bernoulli_bernoulli', 'logistic', 'convolutional', 'pooling']
+        self.valid_layer_types['intermediate'] = ['rbm_gaussian_bernoulli', 'rbm_bernoulli_bernoulli', 'convolutional', 'pooling']
+        self.valid_layer_types['last'] = ['rbm_gaussian_bernoulli', 'rbm_bernoulli_bernoulli', 'logistic']
+        self.weights = {}
+        self.bias = {}
+        self.weight_type = {}
+    def dot(self, nn_weight2, excluded_keys = {'bias': [], 'weights': []}):
+        if type(nn_weight2) is not Neural_Network_Weight:
+            print "argument must be of type Neural_Network_Weight... instead of type", type(nn_weight2), "Exiting now..."
+            sys.exit()
+        return_val = 0
+        for key in self.bias.keys():
+            if key in excluded_keys['bias']:
+                continue
+            return_val += numpy.sum(self.bias[key] * nn_weight2.bias[key])
+        for key in self.weights.keys():
+            if key in excluded_keys['weights']:
+                continue
+            return_val += numpy.sum(self.weights[key] * nn_weight2.weights[key])
+        return return_val
+    def norm(self, excluded_keys = {'bias': [], 'weights': []}):
+        squared_sum = 0
+        for key in self.bias.keys():
+            if key in excluded_keys['bias']:
+                continue
+            squared_sum += numpy.sum(self.bias[key] ** 2)
+        for key in self.weights.keys():
+            if key in excluded_keys['weights']:
+                continue  
+            squared_sum += numpy.sum(self.weights[key] ** 2)
+        return numpy.sqrt(squared_sum)
+    def norm_weights(self, excluded_keys = {'bias': [], 'weights': []}):
+        norm_val = self.norm(excluded_keys)
+        for key in self.bias.keys():
+            if key in excluded_keys['bias']:
+                continue
+            self.bias[key] /= norm_val
+        for key in self.weights.keys():
+            if key in excluded_keys['weights']:
+                continue  
+            self.weights[key] /= norm_val  
+        return self
+    def get_architecture(self):
+        return [self.bias[str(layer_num)].size for layer_num in range(self.num_layers+1) ]
+    def open_weights(self, weight_matrix_name): #completed
+        #the weight file format is very specific, it contains the following variables:
+        #weights01, weights12, weights23, ...
+        #bias0, bias1, bias2, bias3, ....
+        #weights01_type, weights12_type, weights23_type, etc...
+        #optional variables:
+        #num_layers
+        #everything else will be ignored
+        try:
+            weight_dict = sp.loadmat(weight_matrix_name)
+        except IOError:
+            print "Unable to open", weight_matrix_name, "exiting now"
+            sys.exit()
+        if 'num_layers' in weight_dict:
+            self.num_layers = weight_dict['num_layers'][0]
+            if type(self.num_layers) is not int: #hack because write_weights() stores num_layers as [[num_layers]] 
+                self.num_layers = self.num_layers[0]
+        else: #count number of biases for num_layers
+            self.num_layers = 0
+            for layer_num in range(1,101): #maximum number of layers currently is set to 100
+                if ''.join(['bias', str(layer_num)]) in weight_dict:
+                    self.num_layers += 1
+                else:
+                    break
+            if self.num_layers == 0:
+                print "no layers found. Need at least one layer... Exiting now"
+                sys.exit()
+        try:
+            self.bias['0'] = weight_dict['bias0']
+        except KeyError:
+            print "bias0 not found. bias0 must exist for", weight_matrix_name, "to be a valid weight file... Exiting now"
+            sys.exit()
+        for layer_num in range(1,self.num_layers+1): #changes weight layer type to ascii string, which is what we'll need for later functions
+            weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
+            bias_cur_layer = str(layer_num)
+            self.weights[weight_cur_layer] = weight_dict[''.join(['weights', weight_cur_layer])]
+            self.bias[bias_cur_layer] = weight_dict[''.join(['bias', bias_cur_layer])]  
+            self.weight_type[weight_cur_layer] = weight_dict[''.join(['weights',weight_cur_layer,'_type'])][0].encode('ascii', 'ignore')
+        del weight_dict
+        self.check_weights()
+    def init_weights(self, architecture, initial_bias_max, initial_bias_min, initial_weight_min, 
+                           initial_weight_max, last_layer_logistic=True): #completed, expensive, should be compiled
+        self.num_layers = len(architecture) - 1
+        initial_bias_range = initial_bias_max - initial_bias_min
+        initial_weight_range = initial_weight_max - initial_weight_min
+        self.bias['0'] = initial_bias_min + initial_bias_range * numpy.random.random_sample((1,architecture[0]))
+        
+        for layer_num in range(1,self.num_layers+1):
+            weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
+            bias_cur_layer = str(layer_num)
+            self.bias[bias_cur_layer] = initial_bias_min + initial_bias_range * numpy.random.random_sample((1,architecture[layer_num]))
+            self.weights[weight_cur_layer]=(initial_weight_min + initial_weight_range * 
+                                            numpy.random.random_sample( (architecture[layer_num-1],architecture[layer_num]) ))
+            if layer_num == 0:
+                self.weight_type[weight_cur_layer] = 'rbm_gaussian_bernoulli'
+            elif layer_num == self.num_layers and last_layer_logistic == True:
+                self.weight_type[weight_cur_layer] = 'logistic'
+            else:
+                self.weight_type[weight_cur_layer] = 'rbm_bernoulli_bernoulli'
+        
+        print "Finished Initializing Weights"
+        self.check_weights()
+    def check_weights(self): #need to check consistency of features with weights
+        #checks weights to see if following conditions are true
+        # *feature dimension equal to number of rows of first layer (if weights are stored in n_rows x n_cols)
+        # *n_cols of (n-1)th layer == n_rows of nth layer
+        # if only one layer, that weight layer type is logistic, gaussian_bernoulli or bernoulli_bernoulli
+        # check is biases match weight values
+        # if multiple layers, 0 to (n-1)th layer is gaussian bernoulli RBM or bernoulli bernoulli RBM and last layer is logistic regression
+        
+        #if below is true, not running in logistic regression mode, so first layer must be an RBM
+        print "Checking weights...",
+        if self.num_layers > 1: 
+            if self.weight_type['01'] not in self.valid_layer_types['intermediate']:
+                print self.weight_type['01'], "is not valid layer type. Must be one of the following:", self.valid_layer_types['intermediate'], "...Exiting now"
+                sys.exit()
+        
+        #check if feature dimension = n_vis of first layer
+        #if self.features.shape[1] != self.weights['weights01'].shape[0]: 
+        #    print ("Number of feature dimensions: ", self.features.shape[1], 
+        #           " does not equal input dimensions", self.weights['weights01'].shape[0])
+        #    sys.exit()
+        
+        #check biases
+        if self.bias['0'].shape[1] != self.weights['01'].shape[0]:
+            print "Number of visible bias dimensions: ", self.bias['0'].shape[1],
+            print " of layer 0 does not equal visible weight dimensions ", self.weights['01'].shape[0], "... Exiting now"
+            sys.exit()
+        if self.bias['1'].shape[1] != self.weights['01'].shape[1]:
+            print "Number of hidden bias dimensions: ", self.weights['bias1'].shape[1],
+            print " of layer 0 does not equal hidden weight dimensions ", self.weights['weights01'].shape[1], "... Exiting now"
+            sys.exit()
+        
+        #intermediate layers need to have correct shape and RBM type
+        for layer_num in range(1,self.num_layers-1): 
+            weight_prev_layer = ''.join([str(layer_num-1),str(layer_num)])
+            weight_cur_layer = ''.join([str(layer_num),str(layer_num+1)])
+            bias_prev_layer = str(layer_num)
+            bias_cur_layer = str(layer_num+1)
+            #check shape
+            if self.weights[weight_prev_layer].shape[1] != self.weights[weight_cur_layer].shape[0]:
+                print "Dimensionality of", weight_prev_layer, "\b:", self.weights[weight_prev_layer].shape, "does not match dimensionality of", weight_cur_layer, "\b:",self.weights[weight_cur_layer].shape
+                print "The second dimension of", weight_prev_layer, "must equal the first dimension of", weight_cur_layer
+                sys.exit()
+            #check RBM type
+            if self.weight_type[weight_cur_layer] not in self.valid_layer_types['intermediate']:
+                print self.weight_type[weight_cur_layer], "is not valid layer type. Must be one of the following:", self.valid_layer_types['intermediate'], "...Exiting now"
+                sys.exit()
+            #check biases
+            if self.bias[bias_prev_layer].shape[1] != self.weights[weight_cur_layer].shape[0]:
+                print "Number of visible bias dimensions:", self.bias[bias_prev_layer].shape[1], "of layer", weight_cur_layer, "does not equal visible weight dimensions:", self.weights[weight_cur_layer].shape[0]
+                sys.exit()
+            if self.bias[bias_cur_layer].shape[1] != self.weights[weight_cur_layer].shape[1]:
+                print "Number of hidden bias dimensions:", self.bias[bias_cur_layer].shape[1],"of layer", weight_cur_layer, "does not equal hidden weight dimensions", self.weights[weight_cur_layer].shape[1]
+                sys.exit()
+        
+        #check last layer
+        layer_num = self.num_layers-1
+        weight_prev_layer = ''.join([str(layer_num-1),str(layer_num)])
+        weight_cur_layer = ''.join([str(layer_num),str(layer_num+1)])
+        bias_prev_layer = str(layer_num)
+        bias_cur_layer = str(layer_num+1)
+        #check if last layer is of type logistic
+        if self.weight_type[weight_cur_layer] not in self.valid_layer_types['last']:
+            print self.weight_type[weight_cur_layer], " is not valid type for last layer.", 
+            print "Must be one of the following:", self.valid_layer_types['last'], "...Exiting now"
+            sys.exit()
+        #check shape if hidden layer is used
+        if self.num_layers > 1:
+            if self.weights[weight_prev_layer].shape[1] != self.weights[weight_cur_layer].shape[0]:
+                print "Dimensionality of", weight_prev_layer, "\b:", self.weights[weight_prev_layer].shape, "does not match dimensionality of", weight_cur_layer, "\b:",self.weights[weight_cur_layer].shape
+                print "The second dimension of", weight_prev_layer, "must equal the first dimension of", weight_cur_layer
+                sys.exit()
+            #check biases
+            if self.bias[bias_prev_layer].shape[1] != self.weights[weight_cur_layer].shape[0]:
+                print "Number of visible bias dimensions:", self.weights[bias_prev_layer].shape[1], "of layer", weight_cur_layer, "does not equal visible weight dimensions:", self.weights[weight_cur_layer].shape[0]
+                sys.exit()
+            if self.bias[bias_cur_layer].shape[1] != self.weights[weight_cur_layer].shape[1]:
+                print "Number of hidden bias dimensions:", self.weights[bias_cur_layer].shape[1],"of layer", weight_cur_layer, "does not equal hidden weight dimensions", self.weights[weight_cur_layer].shape[1]
+                sys.exit()
+        print "seems copacetic"
+    def write_weights(self, output_name): #completed
+        weight_dict = {}
+        weight_dict['num_layers'] = self.num_layers
+        weight_dict['bias0'] = self.bias['0']
+        for layer_num in range(1, self.num_layers+1):
+            bias_cur_layer = str(layer_num)
+            weight_cur_layer = ''.join([str(layer_num-1), str(layer_num)])
+            weight_dict[''.join(['bias', bias_cur_layer])] = self.bias[bias_cur_layer]
+            weight_dict[''.join(['weights', weight_cur_layer])] = self.weights[weight_cur_layer]
+            weight_dict[''.join(['weights', weight_cur_layer, '_type'])] = self.weight_type[weight_cur_layer]
+        try:
+            sp.savemat(output_name, weight_dict, oned_as='column')
+        except IOError:
+            print "Unable to save ", self.output_name, "... Exiting now"
+            sys.exit()
+        else:
+            print output_name, " successfully saved"
+            del weight_dict
+    def __neg__(self):
+        for key in self.bias.keys():
+            self.bias[key] = -self.bias[key]
+        for key in self.weights.keys():
+            self.weights[key] = -self.weights[key]
+        return self
+    def __add__(self,nn_weight2):
+        if type(nn_weight2) is not Neural_Network_Weight:
+            print "argument must be of type Neural_Network_Weight... instead of type", type(nn_weight2), "Exiting now..."
+            sys.exit()
+        if self.get_architecture() != nn_weight2.get_architecture():
+            print "Neural net models do not match... Exiting now"
+            sys.exit()
+        nn_output = Neural_Network_Weight()
+        nn_output.num_layers = self.num_layers
+        nn_output.weight_type = self.weight_type #is a shallow copy... should I make it a deep copy
+        for key in self.bias.keys():
+            nn_output.bias[key] = self.bias[key] + nn_weight2.bias[key]
+        for key in self.weights.keys():
+            nn_output.weights[key] = self.weights[key] + nn_weight2.weights[key]
+        return nn_output
+    def __sub__(self,nn_weight2):
+        if type(nn_weight2) is not Neural_Network_Weight:
+            print "argument must be of type Neural_Network_Weight... instead of type", type(nn_weight2), "Exiting now..."
+            sys.exit()
+        if self.get_architecture() != nn_weight2.get_architecture():
+            print "Neural net models do not match... Exiting now"
+            sys.exit()
+        nn_output = Neural_Network_Weight()
+        nn_output.num_layers = self.num_layers
+        nn_output.weight_type = self.weight_type #is a shallow copy... should I make it a deep copy
+        for key in self.bias.keys():
+            nn_output.bias[key] = self.bias[key] - nn_weight2.bias[key]
+        for key in self.weights.keys():
+            nn_output.weights[key] = self.weights[key] - nn_weight2.weights[key]
+        return nn_output
+    def __mul__(self, scalar):
+        if type(scalar) is not float or type(scalar) is not int:
+            print "Multiplication must be by a float or int. Instead it is type", type(scalar), "Exiting now"
+            sys.exit()
+        scalar = float(scalar)
+        for key in self.bias.keys():
+            self.bias[key] *= scalar
+        for key in self.weights.keys():
+            self.weights[key] *= scalar
+    def __div__(self, scalar):
+        if type(scalar) is not float or type(scalar) is not int:
+            print "Divide must be by a float or int. Instead it is type", type(scalar), "Exiting now"
+            sys.exit()
+        self.__mul__(1./scalar)
+    def __imul__(self, scalar):
+        if type(scalar) is not float or type(scalar) is not int:
+            print "Multiplication must be by a float or int. Instead it is type", type(scalar), "Exiting now"
+            sys.exit()
+        scalar = float(scalar)
+        for key in self.bias.keys():
+            self.bias[key] *= scalar
+        for key in self.weights.keys():
+            self.weights[key] *= scalar
+        return self
+    def __idiv__(self, scalar):
+        if type(scalar) is not float or type(scalar) is not int:
+            print "Divide must be by a float or int. Instead it is type", type(scalar), "Exiting now"
+            sys.exit()
+        self.__imul__(1./scalar)
+
+
+class Neural_Network(object, Vector_Math):
     #features are stored in format ndata x nvis
     #weights are stored as nvis x nhid at feature level
     #biases are stored as 1 x nhid
@@ -30,12 +322,13 @@ class Neural_Network(object):
         #all_variables - all valid variables for each type
         self.feature_file_name = self.default_variable_define(config_dictionary, 'feature_file_name', arg_type='string')
         self.features = self.read_feature_file()
+        self.model = Neural_Network_Weight()
         self.output_name = self.default_variable_define(config_dictionary, 'output_name', arg_type='string')
         
         self.required_variables = {}
         self.all_variables = {}
         self.required_variables['train'] = ['mode', 'feature_file_name', 'output_name']
-        self.all_variables['train'] = self.required_variables['train'] + ['label_file_name', 'architecture', 'weight_matrix_name', 
+        self.all_variables['train'] = self.required_variables['train'] + ['label_file_name', 'hiddens_structure', 'weight_matrix_name', 
                                'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 
                                'do_pretrain', 'pretrain_method', 'pretrain_iterations', 
                                'pretrain_learning_rate', 'pretrain_batch_size',
@@ -198,129 +491,32 @@ class Neural_Network(object):
         for x in range(len(label_counts)):
             print "#", x, "\b's:", label_counts[x]            
         print "labels seem copacetic"
-    def check_weights(self): #completed
-        #checks weights to see if following conditions are true
-        # *feature dimension equal to number of rows of first layer (if weights are stored in n_rows x n_cols)
-        # *n_cols of (n-1)th layer == n_rows of nth layer
-        # if only one layer, that weight layer type is logistic, gaussian_bernoulli or bernoulli_bernoulli
-        # check is biases match weight values
-        # if multiple layers, 0 to (n-1)th layer is gaussian bernoulli RBM or bernoulli bernoulli RBM and last layer is logistic regression
-        
-        #if below is true, not running in logistic regression mode, so first layer must be an RBM
-        print "Checking weights...",
-        if self.num_layers > 1: 
-            if (self.weights['weights01_type'] != 'gaussian_bernoulli' and
-                self.weights['weights01_type'] != 'bernoulli_bernoulli'):
-                print self.weights['weights01_type'], "is not valid RBM type. Must be either gaussian_bernoulli or bernoulli_bernoulli... Exiting now"
-                sys.exit()
-        
-        #check if feature dimension = n_vis of first layer
-        if self.features.shape[1] != self.weights['weights01'].shape[0]: 
-            print ("Number of feature dimensions: ", self.features.shape[1], 
-                   " does not equal input dimensions", self.weights['weights01'].shape[0])
-            sys.exit()
-        
-        #check biases
-        if self.weights['bias0'].shape[1] != self.weights['weights01'].shape[0]:
-            print ("Number of visible bias dimensions: ", self.weights['bias0'].shape[1],
-                   " of layer 0 does not equal visible weight dimensions ", self.weights['weights01'].shape[0])
-            sys.exit()
-        if self.weights['bias1'].shape[1] != self.weights['weights01'].shape[1]:
-            print ("Number of hidden bias dimensions: ", self.weights['bias1'].shape[1],
-                   " of layer 0 does not equal hidden weight dimensions ", self.weights['weights01'].shape[1])
-            sys.exit()
-        
-        #intermediate layers need to have correct shape and RBM type
-        for idx in range(1,self.num_layers-1): 
-            weight_prev_layer = ''.join(['weights',str(idx-1),str(idx)])
-            weight_cur_layer = ''.join(['weights',str(idx),str(idx+1)])
-            weight_cur_layer_type = ''.join([weight_cur_layer, '_type'])
-            bias_prev_layer = ''.join(['bias',str(idx)])
-            bias_cur_layer = ''.join(['bias',str(idx+1)])
-            #check shape
-            if self.weights[weight_prev_layer].shape[1] != self.weights[weight_cur_layer].shape[0]:
-                print "Dimensionality of", weight_prev_layer, "\b:", self.weights[weight_prev_layer].shape, "does not match dimensionality of", weight_cur_layer, "\b:",self.weights[weight_cur_layer].shape
-                print "The second dimension of", weight_prev_layer, "must equal the first dimension of", weight_cur_layer
-                sys.exit()
-            #check RBM type
-            if (self.weights[weight_cur_layer_type] != 'gaussian_bernoulli' and
-            self.weights[weight_cur_layer_type] != 'bernoulli_bernoulli'):
-                print self.weights[weight_cur_layer_type], "is not valid RBM type. Must be either gaussian_bernoulli or bernoulli_bernoulli"
-                sys.exit()
-            #check biases
-            if self.weights[bias_prev_layer].shape[1] != self.weights[weight_cur_layer].shape[0]:
-                print "Number of visible bias dimensions:", self.weights[bias_prev_layer].shape[1], "of layer", weight_cur_layer, "does not equal visible weight dimensions:", self.weights[weight_cur_layer].shape[0]
-                sys.exit()
-            if self.weights[bias_cur_layer].shape[1] != self.weights[weight_cur_layer].shape[1]:
-                print "Number of hidden bias dimensions:", self.weights[bias_cur_layer].shape[1],"of layer", weight_cur_layer, "does not equal hidden weight dimensions", self.weights[weight_cur_layer].shape[1]
-                sys.exit()
-        
-        #check last layer
-        idx = self.num_layers-1
-        weight_prev_layer = ''.join(['weights',str(idx-1),str(idx)])
-        weight_cur_layer = ''.join(['weights',str(idx),str(idx+1)])
-        weight_cur_layer_type = ''.join([weight_cur_layer, '_type'])
-        bias_prev_layer = ''.join(['bias',str(idx)])
-        bias_cur_layer = ''.join(['bias',str(idx+1)])
-        #check if last layer is of type notrbm_logistic
-        if (self.weights[weight_cur_layer_type] != 'notrbm_logistic' and
-            self.weights[weight_cur_layer_type] != 'gaussian_bernoulli' and
-            self.weights[weight_cur_layer_type] != 'bernoulli_bernoulli'):
-            print self.weights[weight_cur_layer_type], " is not valid type for last layer. It must be gaussian_bernoulli, bernoulli_bernoulli, notrbm_logistic"
-            sys.exit()
-        #check shape if hidden layer is used
-        if self.num_layers > 1:
-            if self.weights[weight_prev_layer].shape[1] != self.weights[weight_cur_layer].shape[0]:
-                print "Dimensionality of", weight_prev_layer, "\b:", self.weights[weight_prev_layer].shape, "does not match dimensionality of", weight_cur_layer, "\b:",self.weights[weight_cur_layer].shape
-                print "The second dimension of", weight_prev_layer, "must equal the first dimension of", weight_cur_layer
-                sys.exit()
-            #check biases
-            if self.weights[bias_prev_layer].shape[1] != self.weights[weight_cur_layer].shape[0]:
-                print "Number of visible bias dimensions:", self.weights[bias_prev_layer].shape[1], "of layer", weight_cur_layer, "does not equal visible weight dimensions:", self.weights[weight_cur_layer].shape[0]
-                sys.exit()
-            if self.weights[bias_cur_layer].shape[1] != self.weights[weight_cur_layer].shape[1]:
-                print "Number of hidden bias dimensions:", self.weights[bias_cur_layer].shape[1],"of layer", weight_cur_layer, "does not equal hidden weight dimensions", self.weights[weight_cur_layer].shape[1]
-                sys.exit()
-        print "seems copacetic"
-    def forward_layer(self, inputs, weights, biases, rbm_type): #completed
-        if rbm_type.split('_')[1] == 'logistic':
+    def forward_layer(self, inputs, weights, biases, weight_type): #completed
+        if weight_type == 'logistic':
             return self.softmax(self.weight_matrix_multiply(inputs, weights, biases))
-        elif rbm_type.split('_')[1] == 'bernoulli': #rbm_type is bernoulli
+        elif weight_type == 'rbm_gaussian_bernoulli' or weight_type == 'rbm_bernoulli_bernoulli':
             return self.sigmoid(self.weight_matrix_multiply(inputs, weights, biases))
         else:
-            print "rbm_type", rbm_type, "is not a valid layer type. Valid layer types are gaussian_bernoulli, bernoulli_bernoulli, and notrbm_logistic. Exiting now..."
+            print "weight_type", weight_type, "is not a valid layer type.",
+            print "Valid layer types are", self.model.valid_layer_types,"Exiting now..."
             sys.exit()
     def forward_pass(self, inputs, verbose=True): #completed
         # forward pass each layer starting with feature level
-        if verbose:
-            print "At layer 1 of", self.num_layers
-        cur_layer = self.forward_layer(inputs, self.weights['weights01'], self.weights['bias1'], self.weights['weights01_type'])
-        for idx in range(1,self.num_layers):
+        cur_layer = inputs
+        for layer_num in range(1,self.model.num_layers+1):
             if verbose:
-                print "At layer", idx+1, "of", self.num_layers
-            weight_cur_layer = ''.join(['weights',str(idx),str(idx+1)])
-            weight_cur_layer_type = ''.join([weight_cur_layer,'_type'])
-            bias_cur_layer = ''.join(['bias',str(idx+1)])
-            cur_layer = self.forward_layer(cur_layer, self.weights[weight_cur_layer], self.weights[bias_cur_layer], self.weights[weight_cur_layer_type])
+                print "At layer", layer_num, "of", self.model.num_layers
+            weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
+            bias_cur_layer = str(layer_num)
+            cur_layer = self.forward_layer(cur_layer, self.model.weights[weight_cur_layer], 
+                                           self.model.bias[bias_cur_layer], self.model.weight_type[weight_cur_layer])
         return cur_layer
-    def weight_matrix_multiply(self,inputs,weights,biases): #completed, expensive, should be compiled
-        #print "input dims are ", inputs.shape
-        #print "weight dims are ", weights.shape
-        #print "bias dims are ", biases.shape
-        return numpy.dot(inputs,weights)+numpy.tile(biases, (inputs.shape[0],1))
     def calculate_cross_entropy(self, output, labels): #completed, expensive, should be compiled
         return -numpy.sum(numpy.log([max(output.item((x,labels[x])),1E-12) for x in range(labels.size)]))
     def calculate_classification_accuracy(self, output, labels): #completed, possibly expensive
         prediction = output.argmax(axis=1).reshape(labels.shape)
         classification_accuracy = sum(prediction == labels) / float(labels.size)
         return classification_accuracy[0]
-    #math functions
-    def sigmoid(self,inputs): #completed, expensive, should be compiled
-        return 1/(1+numpy.exp(-inputs)) #1/(1+e^-X)
-    def softmax(self, inputs): #completed, expensive, should be compiled
-        #subtracting max value of each data point below for numerical stability
-        exp_inputs = numpy.exp(inputs - numpy.transpose(numpy.tile(numpy.max(inputs,axis=1), (inputs.shape[1],1))))
-        return exp_inputs / numpy.transpose(numpy.tile(numpy.sum(exp_inputs, axis=1), (exp_inputs.shape[1],1)))
                 
 class NN_Tester(Neural_Network): #completed
     def __init__(self, config_dictionary): #completed
@@ -336,7 +532,7 @@ class NN_Tester(Neural_Network): #completed
         self.check_keys(config_dictionary)
         
         self.weight_matrix_name = self.default_variable_define(config_dictionary, 'weight_matrix_name', arg_type='string')
-        self.open_weight_matrix()
+        self.model.open_weights(self.weight_matrix_name)
         self.label_file_name = self.default_variable_define(config_dictionary, 'label_file_name', arg_type='string',error_string="No label_file_name defined, just running forward pass",exit_if_no_default=False)
         if self.label_file_name != None:
             self.labels = self.read_label_file()
@@ -354,28 +550,6 @@ class NN_Tester(Neural_Network): #completed
             print "Classification accuracy is", self.calculate_classification_accuracy(self.posterior_probs, self.labels) * 100, "\b%"
         except AttributeError:
             print "no labels given, so skipping classification statistics"    
-    def open_weight_matrix(self): #completed
-        #this is a bit different than the NN_Trainer version, since you need correct weights to work.
-        #In NN_trainer version, we initialize weights randomly if not found, don't want that here.
-        extra_keys = 0
-        try:
-            self.weights = sp.loadmat(self.weight_matrix_name)
-        except IOError:
-            print "Unable to open", self.weight_matrix_name, "exiting now"
-            sys.exit()
-        else:
-            if '__globals__' in self.weights:
-                extra_keys += 1
-            if '__header__' in self.weights:
-                extra_keys += 1
-            if '__version__' in self.weights:
-                extra_keys += 1
-            self.num_layers = (len(self.weights) - 1 - extra_keys) / 3 # we have biases for visible, input, output units (= num_layers + 1), weight transitions (= num_layers) and rbm_type (= num_layers)
-            for idx in range(self.num_layers): #changes weight layer type to ascii string, which is what we'll need for later functions
-                weight_cur_layer = ''.join(['weights',str(idx),str(idx+1)])
-                weight_cur_layer_type = ''.join([weight_cur_layer, '_type'])
-                self.weights[weight_cur_layer_type] = self.weights[weight_cur_layer_type][0].encode('ascii', 'ignore')
-            self.check_weights()
     def write_posterior_prob_file(self): #completed
         try:
             print "Writing to", self.output_name
@@ -424,32 +598,39 @@ class NN_Trainer(Neural_Network):
             del self.label_file_name
         
         #read architecture
-        self.architecture = self.default_variable_define(config_dictionary, 'architecture', arg_type='int_comma_string')
+        self.hiddens_structure = self.default_variable_define(config_dictionary, 'hiddens_structure', arg_type='int_comma_string')
+        architecture = [self.features.shape[1]] + self.hiddens_structure
         
+        if hasattr(self, 'labels'):
+            architecture.append(numpy.max(self.labels)+1) #will have to change later if I have soft weights
         #initialize weights
         self.weight_matrix_name = self.default_variable_define(config_dictionary, 'weight_matrix_name', exit_if_no_default=False)
-        if self.weight_matrix_name == None:
-            del self.weight_matrix_name
-        self.initial_weight_max = self.default_variable_define(config_dictionary, 'initial_weight_max', arg_type='float', default_value=0.1)
-        self.initial_weight_min = self.default_variable_define(config_dictionary, 'initial_weight_min', arg_type='float', default_value=-0.1)
-        self.initial_bias_max = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=-2.2)
-        self.initial_bias_min = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=-2.4)
-        self.open_weight_matrix()
         
+        if self.weight_matrix_name != None:
+            self.model.open_weights(self.weight_matrix_name)
+        else: #initialize model
+            del self.weight_matrix_name
+            self.initial_weight_max = self.default_variable_define(config_dictionary, 'initial_weight_max', arg_type='float', default_value=0.1)
+            self.initial_weight_min = self.default_variable_define(config_dictionary, 'initial_weight_min', arg_type='float', default_value=-0.1)
+            self.initial_bias_max = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=-2.2)
+            self.initial_bias_min = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=-2.4)
+            self.model.init_weights(architecture, self.initial_bias_max, self.initial_bias_min, 
+                                    self.initial_weight_min, self.initial_weight_max, last_layer_logistic=hasattr(self,'labels'))
+            del architecture #we have it in the model
         #pretraining configuration
         self.do_pretrain = self.default_variable_define(config_dictionary, 'do_pretrain', default_value=False, arg_type='boolean')
         if self.do_pretrain:
             self.pretrain_method = self.default_variable_define(config_dictionary, 'pretrain_method', default_value='mean_field', acceptable_values=['mean_field', 'sampling'])
-            self.pretrain_iterations = self.default_variable_define(config_dictionary, 'pretrain_iterations', default_value=[5] * len(self.architecture), 
+            self.pretrain_iterations = self.default_variable_define(config_dictionary, 'pretrain_iterations', default_value=[5] * len(self.hiddens_structure), 
                                                                     error_string="No pretrain_iterations defined, setting pretrain_iterations to default 5 per layer", 
                                                                     arg_type='int_comma_string')
 
-            weight_last_layer_type = ''.join(['weights', str(self.num_layers-1), str(self.num_layers), '_type'])
-            if self.weights[weight_last_layer_type] == 'notrbm_logistic' and (len(self.pretrain_iterations) != self.num_layers - 1):
-                print "given layer type", weight_last_layer_type, "pretraining iterations length should be", self.num_layers-1, "but pretraining_iterations is length ", len(self.pretrain_iterations), "... Exiting now"
+            weight_last_layer = ''.join([str(self.model.num_layers-1), str(self.model.num_layers)])
+            if self.model.weight_type[weight_last_layer] == 'logistic' and (len(self.pretrain_iterations) != self.model.num_layers - 1):
+                print "given layer type", self.model.weight_type[weight_last_layer], "pretraining iterations length should be", self.model.num_layers-1, "but pretraining_iterations is length ", len(self.pretrain_iterations), "... Exiting now"
                 sys.exit()
-            elif self.weights[weight_last_layer_type] != 'notrbm_logistic' and (len(self.pretrain_iterations) != self.num_layers):
-                print "given layer type", weight_last_layer_type, "pretraining iterations length should be", self.num_layers, "but pretraining_iterations is length ", len(self.pretrain_iterations), "... Exiting now"
+            elif self.model.weight_type[weight_last_layer] != 'logistic' and (len(self.pretrain_iterations) != self.model.num_layers):
+                print "given layer type", self.model.weight_type[weight_last_layer], "pretraining iterations length should be", self.model.num_layers, "but pretraining_iterations is length ", len(self.pretrain_iterations), "... Exiting now"
                 sys.exit()
             self.pretrain_learning_rate = self.default_variable_define(config_dictionary, 'pretrain_learning_rate', default_value=[0.01] * sum(self.pretrain_iterations), 
                                                                        error_string="No pretrain_learning_rate defined, setting pretrain_learning_rate to default 0.01 per iteration", 
@@ -485,10 +666,10 @@ class NN_Trainer(Neural_Network):
                 self.backprop_steepest_descent()
             elif self.backprop_method == 'conjugate_gradient':
                 self.backprop_conjugate_gradient()
-        self.write_weight_matrix()
+        self.model.write_weights(self.output_name)
     #pretraining functions
-    def backward_layer(self, hiddens, weights, biases, rbm_type): #completed, transpose expensive, should be compiled
-        if rbm_type.split('_')[0] == 'gaussian':
+    def backward_layer(self, hiddens, weights, biases, weight_type): #completed, transpose expensive, should be compiled
+        if weight_type == 'rbm_gaussian_bernoulli':
             return self.weight_matrix_multiply(hiddens, numpy.transpose(weights), biases)
         else: #rbm_type is bernoulli
             return self.sigmoid(self.weight_matrix_multiply(hiddens, numpy.transpose(weights), biases))
@@ -507,27 +688,26 @@ class NN_Trainer(Neural_Network):
                     batch_size = len(range(batch_index,end_index))
                     inputs = self.features[batch_index:end_index]
                     for idx in range(layer_num): #propagate to current pre-training layer
-                        bias_cur_layer = ''.join(['bias', str(idx+1)])
-                        weight_cur_layer = ''.join(['weights', str(idx), str(idx+1)])
-                        weight_cur_layer_type = ''.join([weight_cur_layer, '_type'])
-                        inputs = self.forward_layer(inputs, self.weights[weight_cur_layer], self.weights[bias_cur_layer], self.weights[weight_cur_layer_type])
+                        bias_cur_layer = str(idx+1)
+                        weight_cur_layer = ''.join([str(idx), str(idx+1)])
+                        inputs = self.forward_layer(inputs, self.model.weights[weight_cur_layer], 
+                                                    self.model.bias[bias_cur_layer], self.model.weight_type[weight_cur_layer])
                 
-                    bias_cur_layer  = ''.join(['bias', str(layer_num+1)])
-                    bias_prev_layer = ''.join(['bias', str(layer_num)])
-                    weight_cur_layer = ''.join(['weights', str(layer_num), str(layer_num+1)])
-                    weight_cur_layer_type = ''.join([weight_cur_layer, '_type'])
-                    
-                    hiddens = self.forward_layer(inputs, self.weights[weight_cur_layer], self.weights[bias_cur_layer], self.weights[weight_cur_layer_type]) #ndata x nhid
-                    reconstruction = self.backward_layer(hiddens, self.weights[weight_cur_layer], self.weights[bias_prev_layer], self.weights[weight_cur_layer_type]) #ndata x nvis
-                    reconstruction_hiddens = self.forward_layer(reconstruction, self.weights[weight_cur_layer], self.weights[bias_cur_layer], self.weights[weight_cur_layer_type]) #ndata x nhid
+                    bias_cur_layer  = str(layer_num+1)
+                    bias_prev_layer = str(layer_num)
+                    weight_cur_layer = ''.join([str(layer_num), str(layer_num+1)])
+                                        
+                    hiddens = self.forward_layer(inputs, self.model.weights[weight_cur_layer], self.model.bias[bias_cur_layer], self.model.weight_type[weight_cur_layer]) #ndata x nhid
+                    reconstruction = self.backward_layer(hiddens, self.model.weights[weight_cur_layer], self.model.bias[bias_prev_layer], self.model.weight_type[weight_cur_layer]) #ndata x nvis
+                    reconstruction_hiddens = self.forward_layer(reconstruction, self.model.weights[weight_cur_layer], self.model.bias[bias_cur_layer], self.model.weight_type[weight_cur_layer]) #ndata x nhid
                 
                     #update weights
                     weight_update =  numpy.dot(numpy.transpose(reconstruction),reconstruction_hiddens) - numpy.dot(numpy.transpose(inputs),hiddens) # inputs: [batch_size * n_dim], hiddens: [batch_size * n_hids]
                     vis_bias_update =  numpy.sum(reconstruction, axis=0) - numpy.sum(inputs, axis=0)
                     hid_bias_update =  numpy.sum(reconstruction_hiddens, axis=0) - numpy.sum(hiddens, axis=0)
-                    self.weights[weight_cur_layer] -= self.pretrain_learning_rate[learning_rate_index] / batch_size * weight_update
-                    self.weights[bias_prev_layer] -= self.pretrain_learning_rate[learning_rate_index] / batch_size * vis_bias_update
-                    self.weights[bias_cur_layer] -= self.pretrain_learning_rate[learning_rate_index] / batch_size * hid_bias_update
+                    self.model.weights[weight_cur_layer] -= self.pretrain_learning_rate[learning_rate_index] / batch_size * weight_update
+                    self.model.bias[bias_prev_layer] -= self.pretrain_learning_rate[learning_rate_index] / batch_size * vis_bias_update
+                    self.model.bias[bias_cur_layer] -= self.pretrain_learning_rate[learning_rate_index] / batch_size * hid_bias_update
                     
                     reconstruction_error += numpy.sum((inputs - reconstruction) * (inputs - reconstruction))
                     batch_index += self.pretrain_batch_size
@@ -540,12 +720,11 @@ class NN_Trainer(Neural_Network):
         #returns hidden values for each layer, needed for steepest descent and conjugate gradient methods
         hiddens = {}
         hiddens[0] = inputs
-        for layer_num in range(1,self.num_layers+1): #will need for steepest descent for first direction
-            weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
-            weight_cur_layer_type = ''.join([weight_cur_layer,'_type'])
-            bias_cur_layer = ''.join(['bias',str(layer_num)])
-            hiddens[layer_num] = self.forward_layer(hiddens[layer_num-1], self.weights[weight_cur_layer], 
-                                                    self.weights[bias_cur_layer], self.weights[weight_cur_layer_type] )
+        for layer_num in range(1,self.model.num_layers+1): #will need for steepest descent for first direction
+            weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
+            bias_cur_layer = str(layer_num)
+            hiddens[layer_num] = self.forward_layer(hiddens[layer_num-1], self.model.weights[weight_cur_layer], 
+                                                    self.model.bias[bias_cur_layer], self.model.weight_type[weight_cur_layer] )
         return hiddens
     def update_weights(self, step_size, direction): #completed, expensive, should be compiled
         #a pretty daft way of updating weights, since we have to store the entire direction (which is another copy of the weights),
@@ -558,7 +737,7 @@ class NN_Trainer(Neural_Network):
     def backprop_steepest_descent(self): #completed, expensive, should be compiled
         print "starting backprop using steepest descent"
         batch_index = 0
-        print "Number of layers is", self.num_layers
+        print "Number of layers is", self.model.num_layers
         for epoch_num in range(len(self.steepest_learning_rate)):
             print "At epoch", epoch_num+1, "of", len(self.steepest_learning_rate), "with learning rate", self.steepest_learning_rate[epoch_num]
             cross_entropy = 0
@@ -572,32 +751,32 @@ class NN_Trainer(Neural_Network):
                 end_index = min(batch_index+self.backprop_batch_size,self.features.shape[0])
                 batch_size = len(range(batch_index,end_index))
                 hiddens = self.forward_first_order_methods(self.features[batch_index:end_index])
-                cross_entropy += self.calculate_cross_entropy(hiddens[self.num_layers], self.labels[batch_index:end_index])
-                num_corr_classified += int(self.calculate_classification_accuracy(hiddens[self.num_layers], self.labels[batch_index:end_index]) * batch_size)
+                cross_entropy += self.calculate_cross_entropy(hiddens[self.model.num_layers], self.labels[batch_index:end_index])
+                num_corr_classified += int(self.calculate_classification_accuracy(hiddens[self.model.num_layers], self.labels[batch_index:end_index]) * batch_size)
                 num_training_examples += batch_size
                 #calculating negative gradient of log softmax
-                weight_vec = -hiddens[self.num_layers] #batchsize x n_outputs
+                weight_vec = -hiddens[self.model.num_layers] #batchsize x n_outputs
                 for label_index in range(batch_index,end_index):
                     data_index = label_index - batch_index
                     weight_vec[data_index, self.labels[label_index]] += 1
                 #averaging batches
-                weight_update = numpy.dot(numpy.transpose(hiddens[self.num_layers-1]), weight_vec)
+                weight_update = numpy.dot(numpy.transpose(hiddens[self.model.num_layers-1]), weight_vec)
                 #I don't use calculate_negative_gradient because structure allows me to store only one layer of weights
                 bias_update = sum(weight_vec)
-                for layer_num in range(self.num_layers-1,0,-1):
-                    weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
-                    weight_next_layer = ''.join(['weights',str(layer_num),str(layer_num+1)])
-                    bias_cur_layer = ''.join(['bias',str(layer_num)])
-                    bias_next_layer = ''.join(['bias',str(layer_num+1)])
-                    weight_vec = numpy.dot(weight_vec, numpy.transpose(self.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out), do the biases get involved in this calculation???
+                for layer_num in range(self.model.num_layers-1,0,-1):
+                    weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
+                    weight_next_layer = ''.join([str(layer_num),str(layer_num+1)])
+                    bias_cur_layer = str(layer_num)
+                    bias_next_layer = str(layer_num+1)
+                    weight_vec = numpy.dot(weight_vec, numpy.transpose(self.model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out), do the biases get involved in this calculation???
                     
-                    self.weights[weight_next_layer] += self.steepest_learning_rate[epoch_num] / batch_size * weight_update
-                    self.weights[bias_next_layer] += self.steepest_learning_rate[epoch_num] / batch_size * bias_update
+                    self.model.weights[weight_next_layer] += self.steepest_learning_rate[epoch_num] / batch_size * weight_update
+                    self.model.bias[bias_next_layer] += self.steepest_learning_rate[epoch_num] / batch_size * bias_update
                     weight_update = numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
                     bias_update = sum(weight_vec)
                 #do final weight_update
-                self.weights[weight_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * weight_update
-                self.weights[bias_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * bias_update
+                self.model.weights[weight_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * weight_update
+                self.model.bias[bias_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * bias_update
 
                 batch_index += self.backprop_batch_size
             sys.stdout.write("\r100.0% done\r")
@@ -926,86 +1105,7 @@ class NN_Trainer(Neural_Network):
         return out_direction
     def bfgs(self):
         pass
-    #weight matrix handling functions
-    #own read weight, write weights, and init weights
-    def open_weight_matrix(self): #completed
-        extra_keys = 0
-        try:    
-            self.weights = sp.loadmat(self.weight_matrix_name)
-        except IOError:
-            print "weight_matrix_name", self.weight_matrix_name, "not found, so initializing weights...",
-            self.init_weight_matrix()
-        except AttributeError:
-            print "\'weight_matrix_name\' (for initial weights) not defined, so initializing weights...",
-            self.init_weight_matrix()
-        else:
-            print self.weight_matrix_name, " found, initializing weights and ignoring architecture value" #want to redefine architecture value
-            if '__globals__' in self.weights:
-                extra_keys += 1
-            if '__header__' in self.weights:
-                extra_keys += 1
-            if '__version__' in self.weights:
-                extra_keys += 1
-            self.num_layers = (len(self.weights) - 1 - extra_keys) / 3 # we have biases for visible, input, output units (= num_layers + 1), weight transitions (= num_layers) and rbm_type (= num_layers)
-            for idx in range(self.num_layers): #changes weight layer type to ascii string, which is what we'll need for later functions
-                weight_cur_layer = ''.join(['weights',str(idx),str(idx+1)])
-                weight_cur_layer_type = ''.join([weight_cur_layer, '_type'])
-                self.weights[weight_cur_layer_type] = self.weights[weight_cur_layer_type][0].encode('ascii', 'ignore')
-            self.check_weights()
-    def init_weight_matrix(self): #completed, expensive, should be compiled
-        self.weights = {}
-        self.num_layers = len(self.architecture)
-        initial_bias_range = self.initial_bias_max - self.initial_bias_min
-        initial_weight_range = self.initial_weight_max - self.initial_weight_min
-        self.weights['bias0'] = (self.initial_bias_min + 
-                                initial_bias_range * 
-                                numpy.random.random_sample((1,self.features.shape[1])))
-        
-        for idx in range(len(self.architecture)):
-            weight_cur_layer = ''.join(['weights',str(idx),str(idx+1)])
-            weight_cur_layer_type = ''.join([weight_cur_layer,'_type'])
-            bias_cur_layer = ''.join(['bias',str(idx+1)])
-            self.weights[bias_cur_layer] = (self.initial_bias_min + 
-                                            initial_bias_range * 
-                                            numpy.random.random_sample((1,self.architecture[idx])))
-            if idx == 0:
-                self.weights[weight_cur_layer_type] = 'gaussian_bernoulli'
-                self.weights[weight_cur_layer]=(self.initial_weight_min + 
-                                                initial_weight_range * 
-                                                numpy.random.random_sample( (self.features.shape[1],self.architecture[idx])) )
-            else:
-                self.weights[weight_cur_layer_type] = 'bernoulli_bernoulli'
-                self.weights[weight_cur_layer]=(self.initial_weight_min + 
-                                                initial_weight_range * 
-                                                numpy.random.random_sample( (self.architecture[idx-1],self.architecture[idx]) ))
-        #initialize last layer
-        last_layer_idx = len(self.architecture)
-        weight_cur_layer = ''.join(['weights',str(last_layer_idx),str(last_layer_idx+1)])
-        weight_cur_layer_type = ''.join([weight_cur_layer,'_type'])
-        bias_cur_layer = ''.join(['bias',str(last_layer_idx+1)])
-        
-        if hasattr(self, 'labels'):
-            self.num_layers += 1
-            self.weights[weight_cur_layer_type] = 'notrbm_logistic'
-            self.weights[bias_cur_layer] = (self.initial_bias_min + 
-                                            initial_bias_range * 
-                                            numpy.random.random_sample((1,numpy.max(self.labels)+1)))
-            self.weights[weight_cur_layer]=(self.initial_weight_min + 
-                                                initial_weight_range * 
-                                                numpy.random.random_sample( (self.architecture[last_layer_idx-1],numpy.max(self.labels)+1) ))
-        else:
-            print "no labels found... not initializing last layer"
-        print "Finished Initializing Weights"
-        self.check_weights()
-    def write_weight_matrix(self): #completed
-        try:
-            sp.savemat(self.output_name, self.weights, oned_as='column')
-        except IOError:
-            print "Unable to save ", self.output_name, "... Exiting now"
-            sys.exit()
-        else:
-            print self.output_name, " successfully saved"
-
+    
 if __name__ == '__main__':
     script_name, config_filename = sys.argv
     print "Opening config file: %s" % config_filename

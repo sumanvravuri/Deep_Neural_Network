@@ -33,9 +33,9 @@ class Vector_Math:
         #print "weight dims are ", weights.shape
         #print "bias dims are ", biases.shape
         return numpy.dot(inputs,weights)+numpy.tile(biases, (inputs.shape[0],1))
-
+        #return numpy.dot(inputs,weights) + biases[:,numpy.newaxis]
 class Neural_Network_Weight(object):
-    def __init__(self,num_layers=0, weights={}, bias={}, weight_type={}):
+    def __init__(self, num_layers=0, weights=None, bias=None, weight_type=None):
         #num_layers
         #weights - actual Neural Network weights, a dictionary with keys corresponding to layer, ie. weights['01'], weights['12'], etc. each numpy array
         #bias - NN biases, again a dictionary stored as bias['0'], bias['1'], bias['2'], etc.
@@ -45,9 +45,18 @@ class Neural_Network_Weight(object):
         self.valid_layer_types['intermediate'] = ['rbm_gaussian_bernoulli', 'rbm_bernoulli_bernoulli', 'convolutional', 'pooling']
         self.valid_layer_types['last'] = ['rbm_gaussian_bernoulli', 'rbm_bernoulli_bernoulli', 'logistic']
         self.num_layers = num_layers
-        self.weights = weights
-        self.bias = bias
-        self.weight_type = weight_type
+        if weights == None:
+            self.weights = {}
+        else:
+            self.weights = copy.deepcopy(weights)
+        if bias == None:
+            self.bias = {}
+        else:
+            self.bias = copy.deepcopy(bias)
+        if weight_type == None:
+            self.weight_type = {}
+        else:
+            self.weight_type = copy.deepcopy(weight_type)
     def clear(self):
         self.num_layers = 0
         self.weights.clear()
@@ -89,17 +98,39 @@ class Neural_Network_Weight(object):
                 continue  
             squared_sum += numpy.sum(self.weights[key] ** 2)
         return numpy.sqrt(squared_sum)
-    def norm_weights(self, excluded_keys = {'bias': [], 'weights': []}):
-        norm_val = self.norm(excluded_keys)
+    def max(self, excluded_keys = {'bias': [], 'weights': []}):
+        max_val = -float('Inf')
         for key in self.bias.keys():
             if key in excluded_keys['bias']:
                 continue
-            self.bias[key] /= norm_val
+            max_val = max(numpy.max(self.bias[key]), max_val)
         for key in self.weights.keys():
             if key in excluded_keys['weights']:
                 continue  
-            self.weights[key] /= norm_val  
-        return self
+            max_val = max(numpy.max(self.weights[key]), max_val)
+        return max_val
+    def min(self, excluded_keys = {'bias': [], 'weights': []}):
+        min_val = float('Inf')
+        for key in self.bias.keys():
+            if key in excluded_keys['bias']:
+                continue
+            min_val = min(numpy.min(self.bias[key]), min_val)
+        for key in self.weights.keys():
+            if key in excluded_keys['weights']:
+                continue  
+            min_val = max(numpy.min(self.weights[key]), min_val)
+        return min_val
+    def clip(self, clip_min, clip_max, excluded_keys = {'bias': [], 'weights': []}):
+        nn_output = copy.deepcopy(self)
+        for key in self.bias.keys():
+            if key in excluded_keys['bias']:
+                continue
+            numpy.clip(self.bias[key], clip_min, clip_max, out=nn_output.bias[key])
+        for key in self.weights.keys():
+            if key in excluded_keys['weights']:
+                continue  
+            numpy.clip(self.weights[key], clip_min, clip_max, out=nn_output.weights[key])
+        return nn_output
     def get_architecture(self):
         return [self.bias[str(layer_num)].size for layer_num in range(self.num_layers+1) ]
     def open_weights(self, weight_matrix_name): #completed
@@ -142,7 +173,7 @@ class Neural_Network_Weight(object):
             self.weight_type[weight_cur_layer] = weight_dict[''.join(['weights',weight_cur_layer,'_type'])][0].encode('ascii', 'ignore')
         del weight_dict
         self.check_weights()
-    def init_weights(self, architecture, initial_bias_max, initial_bias_min, initial_weight_min, 
+    def init_random_weights(self, architecture, initial_bias_max, initial_bias_min, initial_weight_min, 
                            initial_weight_max, last_layer_logistic=True): #completed, expensive, should be compiled
         self.num_layers = len(architecture) - 1
         initial_bias_range = initial_bias_max - initial_bias_min
@@ -165,7 +196,26 @@ class Neural_Network_Weight(object):
         
         print "Finished Initializing Weights"
         self.check_weights()
-    def check_weights(self): #need to check consistency of features with weights
+    def init_zero_weights(self, architecture, last_layer_logistic=True, verbose=False):
+        self.num_layers = len(architecture) - 1
+        self.bias['0'] = numpy.zeros((1,architecture[0]))
+        
+        for layer_num in range(1,self.num_layers+1):
+            weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
+            bias_cur_layer = str(layer_num)
+            #print "initializing weight layer", weight_cur_layer, "and bias layer", bias_cur_layer
+            self.bias[bias_cur_layer] = numpy.zeros((1,architecture[layer_num]))
+            self.weights[weight_cur_layer] = numpy.zeros( (architecture[layer_num-1],architecture[layer_num]) )
+            if layer_num == 0:
+                self.weight_type[weight_cur_layer] = 'rbm_gaussian_bernoulli'
+            elif layer_num == self.num_layers and last_layer_logistic == True:
+                self.weight_type[weight_cur_layer] = 'logistic'
+            else:
+                self.weight_type[weight_cur_layer] = 'rbm_bernoulli_bernoulli'
+        if verbose:
+            print "Finished Initializing Weights"
+        self.check_weights(False)
+    def check_weights(self, verbose=True): #need to check consistency of features with weights
         #checks weights to see if following conditions are true
         # *feature dimension equal to number of rows of first layer (if weights are stored in n_rows x n_cols)
         # *n_cols of (n-1)th layer == n_rows of nth layer
@@ -174,17 +224,12 @@ class Neural_Network_Weight(object):
         # if multiple layers, 0 to (n-1)th layer is gaussian bernoulli RBM or bernoulli bernoulli RBM and last layer is logistic regression
         
         #if below is true, not running in logistic regression mode, so first layer must be an RBM
-        print "Checking weights...",
+        if verbose:
+            print "Checking weights...",
         if self.num_layers > 1: 
             if self.weight_type['01'] not in self.valid_layer_types['intermediate']:
                 print self.weight_type['01'], "is not valid layer type. Must be one of the following:", self.valid_layer_types['intermediate'], "...Exiting now"
                 sys.exit()
-        
-        #check if feature dimension = n_vis of first layer
-        #if self.features.shape[1] != self.weights['weights01'].shape[0]: 
-        #    print ("Number of feature dimensions: ", self.features.shape[1], 
-        #           " does not equal input dimensions", self.weights['weights01'].shape[0])
-        #    sys.exit()
         
         #check biases
         if self.bias['0'].shape[1] != self.weights['01'].shape[0]:
@@ -243,7 +288,8 @@ class Neural_Network_Weight(object):
             if self.bias[bias_cur_layer].shape[1] != self.weights[weight_cur_layer].shape[1]:
                 print "Number of hidden bias dimensions:", self.weights[bias_cur_layer].shape[1],"of layer", weight_cur_layer, "does not equal hidden weight dimensions", self.weights[weight_cur_layer].shape[1]
                 sys.exit()
-        print "seems copacetic"
+        if verbose:
+            print "seems copacetic"
     def write_weights(self, output_name): #completed
         weight_dict = {}
         weight_dict['num_layers'] = self.num_layers
@@ -260,7 +306,7 @@ class Neural_Network_Weight(object):
             print "Unable to save ", self.output_name, "... Exiting now"
             sys.exit()
         else:
-            print output_name, " successfully saved"
+            print output_name, "successfully saved"
             del weight_dict
     def __neg__(self):
         nn_output = copy.deepcopy(self)
@@ -295,22 +341,44 @@ class Neural_Network_Weight(object):
         for key in self.weights.keys():
             nn_output.weights[key] = self.weights[key] - nn_weight2.weights[key]
         return nn_output
-    def __mul__(self, scalar):
+    def __mul__(self, multiplier):
         #if type(scalar) is not float and type(scalar) is not int:
         #    print "__mul__ must be by a float or int. Instead it is type", type(scalar), "Exiting now"
         #    sys.exit()
-        scalar = float(scalar)
         nn_output = copy.deepcopy(self)
+        if type(multiplier) is Neural_Network_Weight:
+            for key in self.bias.keys():
+                nn_output.bias[key] = self.bias[key] * multiplier.bias[key]
+            for key in self.weights.keys():
+                nn_output.weights[key] = self.weights[key] * multiplier.weights[key]
+            return nn_output
+        #otherwise scalar type
+        multiplier = float(multiplier)
+        
         for key in self.bias.keys():
-            nn_output.bias[key] = self.bias[key] * scalar
+            nn_output.bias[key] = self.bias[key] * multiplier
         for key in self.weights.keys():
-            nn_output.weights[key] = self.weights[key] * scalar
+            nn_output.weights[key] = self.weights[key] * multiplier
         return nn_output
-    def __div__(self, scalar):
-        if type(scalar) is not float and type(scalar) is not int:
-            print "Divide must be by a float or int. Instead it is type", type(scalar), "Exiting now"
-            sys.exit()
-        self.__mul__(1./scalar)
+    def __div__(self, divisor):
+        #if type(scalar) is not float and type(scalar) is not int:
+        #    print "Divide must be by a float or int. Instead it is type", type(scalar), "Exiting now"
+        #    sys.exit()
+        nn_output = copy.deepcopy(self)
+        if type(divisor) is Neural_Network_Weight:
+            for key in self.bias.keys():
+                nn_output.bias[key] = self.bias[key] * divisor.bias[key]
+            for key in self.weights.keys():
+                nn_output.weights[key] = self.weights[key] * divisor.weights[key]
+            return nn_output
+        #otherwise scalar type
+        divisor = float(divisor)
+        
+        for key in self.bias.keys():
+            nn_output.bias[key] = self.bias[key] / divisor
+        for key in self.weights.keys():
+            nn_output.weights[key] = self.weights[key] / divisor
+        return nn_output
     def __iadd__(self, nn_weight2):
         if type(nn_weight2) is not Neural_Network_Weight:
             print "argument must be of type Neural_Network_Weight... instead of type", type(nn_weight2), "Exiting now..."
@@ -348,10 +416,19 @@ class Neural_Network_Weight(object):
             self.weights[key] *= scalar
         return self
     def __idiv__(self, scalar):
-        if type(scalar) is not float and type(scalar) is not int:
-            print "Divide must be by a float or int. Instead it is type", type(scalar), "Exiting now"
-            sys.exit()
-        self.__imul__(1./scalar)
+        scalar = float(scalar)
+        for key in self.bias.keys():
+            self.bias[key] /= scalar
+        for key in self.weights.keys():
+            self.weights[key] /= scalar
+        return self
+    def __pow__(self, scalar):
+        scalar = float(scalar)
+        for key in self.bias.keys():
+            self.bias[key] = self.bias[key] ** scalar
+        for key in self.weights.keys():
+            self.weights[key] = self.weights[key] ** scalar
+        return self
     def __copy__(self):
         return Neural_Network_Weight(self.num_layers, self.weights, self.bias, self.weight_type)
     def __deepcopy__(self, memo):
@@ -376,12 +453,13 @@ class Neural_Network(object, Vector_Math):
         self.all_variables = {}
         self.required_variables['train'] = ['mode', 'feature_file_name', 'output_name']
         self.all_variables['train'] = self.required_variables['train'] + ['label_file_name', 'hiddens_structure', 'weight_matrix_name', 
-                               'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 
+                               'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 'save_each_epoch',
                                'do_pretrain', 'pretrain_method', 'pretrain_iterations', 
                                'pretrain_learning_rate', 'pretrain_batch_size',
                                'do_backprop', 'backprop_method', 'backprop_batch_size', 'steepest_learning_rate',
-                               'conjugate_num_epochs', 'conjugate_num_line_searches', 'conjugate_max_iterations', 'conjugate_const_type',
-                               'armijo_const', 'wolfe_const']
+                               'num_epochs', 'num_line_searches', 'armijo_const', 'wolfe_const',
+                               'conjugate_max_iterations', 'conjugate_const_type',
+                               'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix']
         self.required_variables['test'] =  ['mode', 'feature_file_name', 'weight_matrix_name', 'output_name']
         self.all_variables['test'] =  self.required_variables['test'] + ['label_file_name']
     def dump_config_vals(self):
@@ -636,8 +714,13 @@ class NN_Trainer(Neural_Network):
         # feature_file_name
         # output_name
         # this will run logistic regression using steepest descent, which is a bad idea
+        
+        #Raise error if we encounter under/overflow during training, because this is bad... code should handle this gracefully
+        old_settings = numpy.seterr(over='raise',under='raise',invalid='raise')
+        
         self.mode = 'train'
         super(NN_Trainer,self).__init__(config_dictionary)
+        self.num_training_examples = self.features.shape[0]
         self.check_keys(config_dictionary)
         #read label file
         self.label_file_name = self.default_variable_define(config_dictionary, 'label_file_name', arg_type='string', error_string="No label_file_name defined, can only do pretraining",exit_if_no_default=False)
@@ -664,9 +747,10 @@ class NN_Trainer(Neural_Network):
             self.initial_weight_min = self.default_variable_define(config_dictionary, 'initial_weight_min', arg_type='float', default_value=-0.1)
             self.initial_bias_max = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=-2.2)
             self.initial_bias_min = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=-2.4)
-            self.model.init_weights(architecture, self.initial_bias_max, self.initial_bias_min, 
-                                    self.initial_weight_min, self.initial_weight_max, last_layer_logistic=hasattr(self,'labels'))
+            self.model.init_random_weights(architecture, self.initial_bias_max, self.initial_bias_min, 
+                                           self.initial_weight_min, self.initial_weight_max, last_layer_logistic=hasattr(self,'labels'))
             del architecture #we have it in the model
+        self.save_each_epoch = self.default_variable_define(config_dictionary, 'save_each_epoch', arg_type='boolean', default_value=False)
         #pretraining configuration
         self.do_pretrain = self.default_variable_define(config_dictionary, 'do_pretrain', default_value=False, arg_type='boolean')
         if self.do_pretrain:
@@ -697,18 +781,29 @@ class NN_Trainer(Neural_Network):
                 print "No labels found... cannot do backprop... Exiting now"
                 sys.exit()
             self.backprop_method = self.default_variable_define(config_dictionary, 'backprop_method', default_value='steepest_descent', 
-                                                                acceptable_values=['steepest_descent', 'conjugate_gradient'])
+                                                                acceptable_values=['steepest_descent', 'conjugate_gradient', 'krylov_subspace'])
+            self.backprop_batch_size = self.default_variable_define(config_dictionary, 'backprop_batch_size', default_value=2048, arg_type='int')
             if self.backprop_method == 'steepest_descent':
                 self.steepest_learning_rate = self.default_variable_define(config_dictionary, 'steepest_learning_rate', default_value=[0.008, 0.004, 0.002, 0.001], arg_type='float_comma_string')
-            elif self.backprop_method == 'conjugate_gradient':
-                self.conjugate_max_iterations = self.default_variable_define(config_dictionary, 'conjugate_max_iterations', default_value=3, 
-                                                                             arg_type='int')
-                self.conjugate_const_type = self.default_variable_define(config_dictionary, 'conjugate_const_type', arg_type='string', default_value='polak-ribiere')
-                self.conjugate_num_epochs = self.default_variable_define(config_dictionary, 'conjugate_num_epochs', default_value=20, arg_type='int')
-                self.conjugate_num_line_searches = self.default_variable_define(config_dictionary, 'conjugate_num_line_searches', default_value=20, arg_type='int')
+            else:
+                self.num_epochs = self.default_variable_define(config_dictionary, 'num_epochs', default_value=20, arg_type='int')
+                #do line search
+                self.num_line_searches = self.default_variable_define(config_dictionary, 'num_line_searches', default_value=20, arg_type='int')
                 self.armijo_const = self.default_variable_define(config_dictionary, 'armijo_const', arg_type='float', default_value=0.1)
                 self.wolfe_const = self.default_variable_define(config_dictionary, 'wolfe_const', arg_type='float', default_value=0.2)
-            self.backprop_batch_size = self.default_variable_define(config_dictionary, 'backprop_batch_size', default_value=2048, arg_type='int')
+                if self.backprop_method == 'conjugate_gradient':
+                    self.conjugate_max_iterations = self.default_variable_define(config_dictionary, 'conjugate_max_iterations', default_value=3, 
+                                                                                 arg_type='int')
+                    self.conjugate_const_type = self.default_variable_define(config_dictionary, 'conjugate_const_type', arg_type='string', default_value='polak-ribiere', 
+                                                                             acceptable_values = ['polak-ribiere', 'polak-ribiere+', 'hestenes-stiefel', 'fletcher-reeves'])
+                elif self.backprop_method == 'krylov_subspace':
+                    self.second_order_matrix = self.default_variable_define(config_dictionary, 'second_order_matrix', arg_type='string', default_value='gauss-newton', 
+                                                                            acceptable_values=['gauss-newton', 'hessian'])
+                    self.krylov_num_directions = self.default_variable_define(config_dictionary, 'krylov_num_directions', arg_type='int', default_value=20, 
+                                                                              acceptable_values=range(2,2000))
+                    self.krylov_num_batch_splits = self.default_variable_define(config_dictionary, 'krylov_num_batch_splits', arg_type='int', default_value=self.krylov_num_directions, 
+                                                                                acceptable_values=range(2,2000))
+                    self.krylov_num_bfgs_epochs = self.default_variable_define(config_dictionary, 'krylov_num_bfgs_epochs', arg_type='int', default_value=self.krylov_num_directions)
         self.dump_config_vals()
     def train(self): #completed
         if self.do_pretrain:
@@ -718,6 +813,8 @@ class NN_Trainer(Neural_Network):
                 self.backprop_steepest_descent()
             elif self.backprop_method == 'conjugate_gradient':
                 self.backprop_conjugate_gradient()
+            elif self.backprop_method == 'krylov_subspace':
+                self.backprop_krylov_subspace()
         self.model.write_weights(self.output_name)
     #pretraining functions
     def backward_layer(self, hiddens, weights, biases, weight_type): #completed, transpose expensive, should be compiled
@@ -735,9 +832,11 @@ class NN_Trainer(Neural_Network):
                 batch_index = 0
                 end_index = 0
                 reconstruction_error = 0
-                while end_index < self.features.shape[0]: #run through batches
-                    end_index = min(batch_index+self.pretrain_batch_size,self.features.shape[0])
-                    batch_size = len(range(batch_index,end_index))
+                while end_index < self.num_training_examples: #run through batches
+                    per_done = float(batch_index)/self.num_training_examples*100
+                    sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
+                    end_index = min(batch_index+self.pretrain_batch_size,self.num_training_examples)
+                    batch_size = end_index - batch_index
                     inputs = self.features[batch_index:end_index]
                     for idx in range(layer_num): #propagate to current pre-training layer
                         bias_cur_layer = str(idx+1)
@@ -763,7 +862,10 @@ class NN_Trainer(Neural_Network):
                     
                     reconstruction_error += numpy.sum((inputs - reconstruction) * (inputs - reconstruction))
                     batch_index += self.pretrain_batch_size
+                sys.stdout.write("\r100.0% done \r")
                 print "squared reconstuction error is", reconstruction_error
+                if self.save_each_epoch:
+                    self.model.write_weights(''.join([self.output_name, '_pretrain_rbm_', str(layer_num+1), '_iter_', str(iteration+1)]))
                 learning_rate_index += 1
     #fine-tuning/backprop functions
     #currently implemented are stochastic/steepest descent
@@ -782,24 +884,21 @@ class NN_Trainer(Neural_Network):
         return hiddens    
     def backprop_steepest_descent(self): #completed, expensive, should be compiled
         print "starting backprop using steepest descent"
-        batch_index = 0
         print "Number of layers is", self.model.num_layers
+        
+        classification_stats = self.calculate_classification_statistics(self.features, self.labels, self.model)
+        print "cross-entropy before steepest descent is", classification_stats[0]
+        print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
         for epoch_num in range(len(self.steepest_learning_rate)):
             print "At epoch", epoch_num+1, "of", len(self.steepest_learning_rate), "with learning rate", self.steepest_learning_rate[epoch_num]
-            cross_entropy = 0
-            num_corr_classified = 0
             batch_index = 0
             end_index = 0
-            num_training_examples = 0
-            while end_index < self.features.shape[0]: #run through the batches
-                per_done = float(batch_index)/self.features.shape[0]*100
-                sys.stdout.write("\r%.1f%% done" % per_done), sys.stdout.flush()
-                end_index = min(batch_index+self.backprop_batch_size,self.features.shape[0])
-                batch_size = len(range(batch_index,end_index))
+            while end_index < self.num_training_examples: #run through the batches
+                per_done = float(batch_index)/self.num_training_examples*100
+                sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
+                end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
+                batch_size = end_index - batch_index
                 hiddens = self.forward_first_order_methods(self.features[batch_index:end_index])
-                cross_entropy += self.calculate_cross_entropy(hiddens[self.model.num_layers], self.labels[batch_index:end_index])
-                num_corr_classified += int(self.calculate_classification_accuracy(hiddens[self.model.num_layers], self.labels[batch_index:end_index]) * batch_size)
-                num_training_examples += batch_size
                 #calculating negative gradient of log softmax
                 weight_vec = -hiddens[self.model.num_layers] #batchsize x n_outputs
                 for label_index in range(batch_index,end_index):
@@ -808,7 +907,7 @@ class NN_Trainer(Neural_Network):
                 #averaging batches
                 bias_update = sum(weight_vec)
                 weight_update = numpy.dot(numpy.transpose(hiddens[self.model.num_layers-1]), weight_vec)
-                #I don't use calculate_negative_gradient because structure allows me to store only one layer of weights
+                #I don't use calculate_gradient because structure allows me to store only one layer of weights
                 
                 for layer_num in range(self.model.num_layers-1,0,-1):
                     weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
@@ -818,51 +917,62 @@ class NN_Trainer(Neural_Network):
                     weight_vec = numpy.dot(weight_vec, numpy.transpose(self.model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out), do the biases get involved in this calculation???
                     
                     self.model.weights[weight_next_layer] += self.steepest_learning_rate[epoch_num] / batch_size * weight_update
-                    self.model.bias[bias_next_layer] += self.steepest_learning_rate[epoch_num] / batch_size * bias_update
+                    self.model.bias[bias_next_layer][0] += self.steepest_learning_rate[epoch_num] / batch_size * bias_update
                     bias_update = sum(weight_vec)
                     weight_update = numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
                     
                 #do final weight_update
                 self.model.weights[weight_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * weight_update
-                self.model.bias[bias_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * bias_update
+                self.model.bias[bias_cur_layer][0] += self.steepest_learning_rate[epoch_num] / batch_size * bias_update
 
                 batch_index += self.backprop_batch_size
-            sys.stdout.write("\r100.0% done\r")
-            print "average cross entropy at the end of epoch is", cross_entropy / num_training_examples
-            print "number correctly classified is", num_corr_classified, "of", num_training_examples
+            sys.stdout.write("\r100.0% done \r"), sys.stdout.flush()
+            classification_stats = self.calculate_classification_statistics(self.features, self.labels, self.model)
+            print "cross-entropy at the end of the epoch is", classification_stats[0]
+            print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
+            if self.save_each_epoch:
+                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
     def backprop_conjugate_gradient(self): #Running... need preconditioners
         #in this framework "points" are self.weights
         #will also need to store CG-direction, which will be in dictionary conj_grad_dir
         print "Starting backprop using conjugate gradient"
         print "Number of layers is", self.model.num_layers
+        
+        classification_stats = self.calculate_classification_statistics(self.features, self.labels, self.model)
+        print "cross-entropy before krylov subspace descent is", classification_stats[0]
+        print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
         #we have three new gradients now: conjugate_gradient_dir, old_gradient, and new_gradient
-        #conj_grad_dir = copy.deepcopy(self.model)
         excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
         init_step_num = 0
         step_size = 0
-        for epoch_num in range(self.conjugate_num_epochs):
-            print "Epoch", epoch_num+1, "of", self.conjugate_num_epochs
-            cross_entropy = 0
-            num_corr_classified = 0
+        for epoch_num in range(self.num_epochs):
+            print "Epoch", epoch_num+1, "of", self.num_epochs
+            num_conj_dir_switches = 0
             batch_index = 0
             end_index = 0
-            num_training_examples = 0
-            while end_index < self.features.shape[0]: #run through the batches
-                per_done = float(batch_index)/self.features.shape[0]*100
-                sys.stdout.write("\r%.1f%% done" % per_done), sys.stdout.flush()
-                end_index = min(batch_index+self.backprop_batch_size,self.features.shape[0])
-                batch_size = len(range(batch_index,end_index))
+            line_search_failures = 0
+            while end_index < self.num_training_examples: #run through the batches
+                per_done = float(batch_index)/self.num_training_examples*100
+                print "\r                                                                                                         \r", #clear line
+                sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
+                end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
                 batch_inputs = self.features[batch_index:end_index]
                 batch_labels = self.labels[batch_index:end_index]
                 
                 ########## perform conjugate gradient on the batch ########################
                 failed_line_search = False
                 conj_grad_dir = -self.calculate_gradient(batch_inputs, batch_labels) #steepest descent for first direction
+                #if epoch_num < 5: #zeroing out all but last layer, only update last layer
+                #    for layer_num in range(1,self.model.num_layers):
+                #        weight_cur_layer = ''.join([str(layer_num-1), str(layer_num)])
+                #        bias_cur_layer = str(layer_num)
+                #        conj_grad_dir.weights[weight_cur_layer] *= 0
+                #        conj_grad_dir.bias[bias_cur_layer] *= 0
                 old_gradient = copy.deepcopy(conj_grad_dir)
                 new_gradient = copy.deepcopy(conj_grad_dir)
-                init_step_size = step_size * init_step_num / (conj_grad_dir.norm() ** 2)
+                init_step_size = step_size * init_step_num / (conj_grad_dir.norm(excluded_keys) ** 2)
                 for _ in range(self.conjugate_max_iterations):
-                    step_size = self.line_search(batch_inputs, batch_labels, conj_grad_dir, max_line_searches=self.conjugate_num_line_searches, 
+                    step_size = self.line_search(batch_inputs, batch_labels, conj_grad_dir, max_line_searches=self.num_line_searches, 
                                                  init_step_size=init_step_size)
                     if step_size > 0: #line search did not fail
                         #update weights if successful
@@ -870,47 +980,60 @@ class NN_Trainer(Neural_Network):
                         failed_line_search = False
                         #update search direction
                         new_gradient = self.calculate_gradient(batch_inputs, batch_labels)
+                #        if epoch_num < 5: #zeroing out all but last layer, only update last layer
+                #            for layer_num in range(1,self.model.num_layers):
+                #                weight_cur_layer = ''.join([str(layer_num-1), str(layer_num)])
+                #                bias_cur_layer = str(layer_num)
+                #                new_gradient.weights[weight_cur_layer] *= 0
+                #                new_gradient.bias[bias_cur_layer] *= 0
                         init_step_num = abs(old_gradient.dot(conj_grad_dir,excluded_keys)) #since we know conj_grad_dir is a descent dir
-                        #print "new_gradient.dot(old_gradient, excluded_keys)", new_gradient.dot(old_gradient, excluded_keys)
-                        #print "new_gradient.dot(new_gradient, excluded_keys)", new_gradient.dot(new_gradient, excluded_keys)
-                        #print "new_gradient.dot(conj_grad_dir, excluded_keys)", new_gradient.dot(conj_grad_dir, excluded_keys)
                         conj_grad_dir = self.calculate_conjugate_gradient_direction(batch_inputs, batch_labels, old_gradient, new_gradient, 
                                                                                     conj_grad_dir, const_type=self.conjugate_const_type)
                         init_step_size = step_size * init_step_num / abs(new_gradient.dot(conj_grad_dir, excluded_keys))
-                        #print "post: new_gradient.dot(conj_grad_dir, excluded_keys)", new_gradient.dot(conj_grad_dir, excluded_keys)
                         old_gradient.clear()
                         old_gradient = copy.deepcopy(new_gradient)
                         new_gradient.clear()
-                        #print "old_gradient.dot(conj_grad_dir, excluded_keys)", old_gradient.dot(conj_grad_dir, excluded_keys)
                         if old_gradient.dot(conj_grad_dir, excluded_keys) > 0: #conjugate gradient direction not a descent direction, switching to steepest descent
-                            print "\rCalculated conjugate direction not a descent direction, switching direction to negative gradient"
+                            sys.stdout.write("\rCalculated conjugate direction not a descent direction, switching direction to negative gradient"), sys.stdout.flush()
+                            num_conj_dir_switches += 1
                             conj_grad_dir = -self.calculate_gradient(batch_inputs, batch_labels)
-                            init_step_size = step_size * init_step_num / (conj_grad_dir.norm() ** 2)
+                            init_step_size = step_size * init_step_num / (conj_grad_dir.norm(excluded_keys) ** 2)
                             old_gradient = copy.deepcopy(conj_grad_dir)
                     else: #line search failed
+                        line_search_failures += 1
                         if failed_line_search: #failed line search twice in a row, so bail
+                            sys.stdout.write("\rline search failed twice. Moving to next batch...\r"), sys.stdout.flush()
                             break
+                        sys.stdout.write("\rline search failed...\r"), sys.stdout.flush()
                         failed_line_search = True
                         conj_grad_dir = -self.calculate_gradient(batch_inputs, batch_labels)
+                #        if epoch_num < 5: #zeroing out all but last layer, only update last layer
+                #            for layer_num in range(1,self.model.num_layers):
+                #                weight_cur_layer = ''.join([str(layer_num-1), str(layer_num)])
+                #                bias_cur_layer = str(layer_num)
+                #                conj_grad_dir.weights[weight_cur_layer] *= 0
+                #                conj_grad_dir.bias[bias_cur_layer] *= 0
                         init_step_size = 0.0
                         old_gradient = conj_grad_dir
                 ###########end conjugate gradient batch ####################################
                 
-                batch_targets = self.forward_pass(batch_inputs, verbose=False)
-                cross_entropy += self.calculate_cross_entropy(batch_targets, batch_labels)
-                #print "cross entropy in batch is", self.calculate_cross_entropy(batch_targets, batch_labels)
-                num_corr_classified += int(self.calculate_classification_accuracy(batch_targets, batch_labels) * batch_size)
-                num_training_examples += batch_size
+                #batch_targets = self.forward_pass(batch_inputs, verbose=False)
+                #cross_entropy += self.calculate_cross_entropy(batch_targets, batch_labels)
+                #num_corr_classified += int(self.calculate_classification_accuracy(batch_targets, batch_labels) * batch_size)
                 batch_index += self.backprop_batch_size
-            sys.stdout.write("\r100.0% done\r")
-            print "average cross entropy at the end of epoch is", cross_entropy / num_training_examples
-            print "number correctly classified is", num_corr_classified, "of", num_training_examples
+            sys.stdout.write("\r100.0% done \r")
+            print "number of failed line search in this epoch is", line_search_failures
+            print "number of times conjugate direction was not a descent direction is", num_conj_dir_switches
+            classification_stats = self.calculate_classification_statistics(self.features, self.labels, self.model)
+            print "cross-entropy at the end of the epoch is", classification_stats[0]
+            print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
+            if self.save_each_epoch:
+                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))       
     def calculate_conjugate_gradient_direction(self, batch_inputs, batch_labels, old_gradient, new_gradient, #needs preconditioners, expensive, should be compiled
                                                current_conjugate_gradient_direction, const_type='polak-ribiere'):
         excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
         if const_type == 'polak-ribiere' or const_type == 'polak-ribiere+':
             cg_const = new_gradient.dot(new_gradient - old_gradient, excluded_keys) / old_gradient.norm(excluded_keys)**2
-            #print "cg_const is", cg_const
             if const_type == 'polak-ribiere+':
                 cg_const = max(cg_const, 0)
         elif const_type == 'fletcher-reeves':
@@ -939,7 +1062,7 @@ class NN_Trainer(Neural_Network):
         #average layers in batch
         weight_cur_layer = ''.join([str(model.num_layers-1),str(model.num_layers)])
         bias_cur_layer = str(model.num_layers)
-        gradient.bias[bias_cur_layer] = sum(weight_vec)
+        gradient.bias[bias_cur_layer][0] = sum(weight_vec)
         gradient.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[model.num_layers-1]), weight_vec)
         #propagate to sigmoid layers
         for layer_num in range(model.num_layers-1,0,-1):
@@ -947,11 +1070,31 @@ class NN_Trainer(Neural_Network):
             weight_next_layer = ''.join([str(layer_num),str(layer_num+1)])
             bias_cur_layer = str(layer_num)
             weight_vec = numpy.dot(weight_vec, numpy.transpose(model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out)
-            gradient.bias[bias_cur_layer] = sum(weight_vec)
+            gradient.bias[bias_cur_layer][0] = sum(weight_vec)
             gradient.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
         return gradient
+    def backward_pass(self, backward_inputs, hiddens, model=None): #need to test
+        if model == None:
+            model = self.model
+        output_model = Neural_Network_Weight(num_layers=model.num_layers)
+        output_model.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
+        weight_vec = backward_inputs
+        #average layers in batch
+        weight_cur_layer = ''.join([str(model.num_layers-1), str(model.num_layers)])
+        bias_cur_layer = str(model.num_layers)
+        output_model.bias[bias_cur_layer][0] = sum(weight_vec)
+        output_model.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[model.num_layers-1]), weight_vec)
+        #propagate to sigmoid layers
+        for layer_num in range(model.num_layers-1,0,-1):
+            weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
+            weight_next_layer = ''.join([str(layer_num),str(layer_num+1)])
+            bias_cur_layer = str(layer_num)
+            weight_vec = numpy.dot(weight_vec, numpy.transpose(model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out)
+            output_model.bias[bias_cur_layer][0] = sum(weight_vec) #this is somewhat ugly
+            output_model.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
+        return output_model
     def line_search(self, batch_inputs, batch_labels, direction, max_step_size=0.1, #completed, way expensive, should be compiled
-                    max_line_searches=20, init_step_size=0.0): 
+                    max_line_searches=20, init_step_size=0.0, model = None): 
         # the line search algorithm is basically as follows
         # we have directional derivative of p_k at cross_entropy(0), in gradient_direction, self.armijo_const, and self.wolfe_const, and stepsize_max, current cross-entropy in batch
         # choose stepsize to be between 0 and stepsize_max (usually by finding minimum or quadratic, cubic, or quartic function)
@@ -969,6 +1112,9 @@ class NN_Trainer(Neural_Network):
         #        interp between current step size and previous one
         #     otherwise we essentially didn't go far enough with our step size, so find step_size between current_stepsize and max_stepsize
         
+        
+        if model == None:
+            model = self.model
         #checks to see if armijo and wolfe constants are valid
         if self.armijo_const < 0 or self.armijo_const > 1:
             print "armijo constant (key armijo_const) must be between 0 and 1. Instead it is", self.armijo_const, "... Exiting now"
@@ -981,35 +1127,8 @@ class NN_Trainer(Neural_Network):
             print "while the wolfe constant is", self.wolfe_const, "... Exiting now"
             sys.exit()
         excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
-        zero_step_loss = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False), batch_labels) #\phi_0
-        #print "\nzero step loss is", zero_step_loss
-        #zero_gradient = self.calculate_gradient(batch_inputs, batch_labels)
-        zero_step_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels), excluded_keys)
-        #finite_diff_zero_step = (self.calculate_cross_entropy(self.forward_pass(batch_inputs, model= self.model + direction * (1. / 10000000), verbose=False), batch_labels) - self.calculate_cross_entropy(self.forward_pass(batch_inputs, model= self.model - direction * (1. / 10000000), verbose=False), batch_labels)) / (2. / 10000000)
-        #print "norm of zero_step gradient is", self.calculate_gradient(batch_inputs, batch_labels).norm()
-        #print "zero_step_directional_derivative is", zero_step_directional_derivative
-        #print "finite difference approximation", finite_diff_zero_step
-        #print "norm^2 direction is", direction.norm(excluded_keys) ** 2
-        #self.calculate_gradient(batch_inputs, batch_labels).print_statistics()
-        #for step_index in range(10000):
-            #hop_size = 1. / 1000000
-            #step_size = (step_index + 300.) * hop_size
-            #print "step_size is", step_size
-            #proposed_loss = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, 
-            #                                                               model= self.model + direction * step_size), batch_labels)
-            #print "proposed loss is", proposed_loss
-            #gradient = self.calculate_gradient(batch_inputs, batch_labels, model= self.model + direction * step_size)
-            #print "zero_gradient.weights[34]:", zero_gradient.weights['34']
-            #print "gradient.weights[34]:", gradient.weights['34']
-            #for key in gradient.weights.keys():
-            #    print "for key", key, "change matrix is", gradient.weights[key] - zero_gradient.weights[key]
-            #proposed_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels, model= self.model + direction * step_size), excluded_keys)
-            #print "norm of proposed gradient is", self.calculate_gradient(batch_inputs, batch_labels, model= self.model + direction * step_size).norm()
-            #print "proposed directional_derivative is", proposed_directional_derivative, "\n"
-            #print "finite difference approximation is", (self.calculate_cross_entropy(self.forward_pass(batch_inputs, model= self.model + direction * (step_size + 1. / 10000000), verbose=False), batch_labels) - self.calculate_cross_entropy(self.forward_pass(batch_inputs, model= self.model + direction * (step_size - 1. / 10000000), verbose=False), batch_labels)) / (2. / 10000000)
-            #self.calculate_gradient(batch_inputs, batch_labels, model= self.model + direction * step_size).print_statistics()
-            #raw_input()
-        #sys.exit()
+        zero_step_loss = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=model), batch_labels) #\phi_0
+        zero_step_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels, model), excluded_keys)
         if init_step_size == 0.0:
             step_size = max_step_size / 2
         else:
@@ -1020,37 +1139,32 @@ class NN_Trainer(Neural_Network):
         (upper_bracket, upper_bracket_loss, upper_bracket_deriv, lower_bracket, lower_bracket_loss, lower_bracket_deriv) = [0 for _ in range(6)]
         
         for num_line_searches in range(1,max_line_searches+1): #looking for brackets
-            #update weights
-            proposed_loss = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, 
-                                                                           model= self.model + direction * step_size), batch_labels)
+            try:
+                proposed_loss = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False,
+                                                                               model = model + direction * step_size), batch_labels)
+            except FloatingPointError:
+                print "encountered floating point error (likely under/overflow during forward pass, so decreasing step size by 1/2"
+                step_size /= 2
+                continue
             if math.isinf(proposed_loss) or math.isnan(proposed_loss): #numerical stability issues
                 print "have numerical stability issues, so decreasing step size by 1/2"
                 step_size /= 2
                 continue
-            #print "proposed loss is", proposed_loss
-            #print "rhs is", zero_step_loss + self.armijo_const * step_size * zero_step_directional_derivative
-            #proposed_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels, model= self.model + direction * step_size), excluded_keys)
-            #print "step_size is", step_size
-            #print "Wolfe #1: proposed loss is", proposed_loss, "and needs to be less than", zero_step_loss + self.armijo_const * step_size * zero_step_directional_derivative
-            #print "Wolfe #2: proposed dd", proposed_directional_derivative, "abs of which must be less than", -self.wolfe_const * zero_step_directional_derivative, -self.wolfe_const * direction.dot(self.calculate_gradient(batch_inputs, batch_labels), excluded_keys)
-            #print "norm of proposed gradient is", self.calculate_gradient(batch_inputs, batch_labels, model= self.model + direction * step_size).norm()
-            #raw_input()
             if proposed_loss > zero_step_loss + self.armijo_const * step_size * zero_step_directional_derivative: #fails Armijo rule, but we have found our bracket
                 # we now know that Wolfe conditions are satisfied between prev_step_size  and proposed_step_size
                 #print "Armijo rule failed, so generating brackets"
                 upper_bracket = step_size
                 upper_bracket_loss = proposed_loss
-                upper_bracket_deriv = direction.dot(self.calculate_gradient(batch_inputs, batch_labels), excluded_keys)
+                upper_bracket_deriv = direction.dot(self.calculate_gradient(batch_inputs, batch_labels, model), excluded_keys)
                 lower_bracket = prev_step_size
                 lower_bracket_loss = prev_loss
                 lower_bracket_deriv = prev_directional_derivative
                 break
-            proposed_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels, model= self.model + direction * step_size), excluded_keys)
-            #print direction.dot(self.calculate_gradient(batch_inputs, batch_labels), excluded_keys), "zero_step", zero_step_directional_derivative
-            #print "proposed_directional_derivative is", proposed_directional_derivative
+            proposed_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels, model = model + direction * step_size), excluded_keys)
             
             if abs(proposed_directional_derivative) <= -self.wolfe_const * zero_step_directional_derivative: #satisfies strong Wolfe condition
                 #print "Wolfe conditions satisfied"
+                #print "returned step size", step_size
                 return step_size
             elif proposed_directional_derivative >= 0:
                 #print "went too far for second order condition, brackets found"
@@ -1062,8 +1176,6 @@ class NN_Trainer(Neural_Network):
                 lower_bracket_deriv = prev_directional_derivative
                 break
             else: #satisfies Armijo rule, but not 2nd Wolfe condition, so go out further
-                #print "satisfied Armijo, but not Wolfe, so increasing step size. Current loss is", zero_step_loss, "and proposed loss is", proposed_loss
-                #print "derivative of step size is", proposed_directional_derivative, "current derivative is", cur_directional_derivative
                 prev_step_size = step_size
                 prev_loss = proposed_loss
                 prev_directional_derivative = proposed_directional_derivative
@@ -1076,21 +1188,10 @@ class NN_Trainer(Neural_Network):
         for _ in range(remaining_line_searches): #searching for good step sizes within bracket
             #print "upper bracket:", upper_bracket, "lower bracket:", lower_bracket
             step_size = self.interpolate_step_size((upper_bracket, upper_bracket_loss, upper_bracket_deriv),
-                                                        (lower_bracket, lower_bracket_loss, lower_bracket_deriv))#(upper_bracket + lower_bracket) / 2 #need to change to another interpolation method
-            #print "step size is", step_size
-            #print "proposed step size is", proposed_step_size, "while upper bracket is", upper_bracket, "and lower bracket is", lower_bracket
-            #self.update_weights(proposed_step_size - prev_step_size, direction)
-            #print "current stepsize is", overall_step_size, "with proposed_loss", proposed_loss, "and zero_step_loss", zero_step_loss
+                                                        (lower_bracket, lower_bracket_loss, lower_bracket_deriv))
             proposed_loss = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False,
-                                                                           model= self.model + direction * step_size), batch_labels)
-            proposed_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels, model= self.model + direction * step_size), excluded_keys)
-            #print "proposed loss is", proposed_loss, "and dir_deriv", proposed_directional_derivative
-            #print "zero_step_dir_deriv", zero_step_directional_derivative
-            
-            #print "Wolfe #1: proposed loss is", proposed_loss, "and needs to be less than", zero_step_loss + self.armijo_const * step_size * zero_step_directional_derivative
-            #print "Wolfe #2: proposed dd", proposed_directional_derivative, "abs of which must be less than", -self.wolfe_const * zero_step_directional_derivative, -self.wolfe_const * direction.dot(self.calculate_gradient(batch_inputs, batch_labels), excluded_keys)
-            #print "norm of proposed gradient is", self.calculate_gradient(batch_inputs, batch_labels, model= self.model + direction * step_size).norm()
-            #raw_input()
+                                                                           model = model + direction * step_size), batch_labels)
+            proposed_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels, model = model + direction * step_size), excluded_keys)
             if proposed_loss > zero_step_loss + self.armijo_const * step_size * zero_step_directional_derivative or proposed_loss >= lower_bracket_loss:
                 #print "Armijo rule failed, adjusting brackets"
                 upper_bracket = step_size
@@ -1098,9 +1199,9 @@ class NN_Trainer(Neural_Network):
                 upper_bracket_deriv = proposed_directional_derivative
             else:
                 #print "Armijo rule satisfied"
-                #print "checking 2nd Wolfe condition with", -self.wolfe_const * zero_step_directional_derivative, "proposed dd", abs(proposed_directional_derivative)
                 if abs(proposed_directional_derivative) <= -self.wolfe_const * zero_step_directional_derivative: #satisfies strong Wolfe condition
                     #print "satisfied Wolfe conditions"
+                    #print "returned step size", step_size
                     return step_size
                 elif proposed_directional_derivative * (upper_bracket - lower_bracket) >= 0:
                     #print "went too far on step ... adjusting brackets"
@@ -1110,13 +1211,9 @@ class NN_Trainer(Neural_Network):
                 lower_bracket = step_size
                 lower_bracket_loss = proposed_loss
                 lower_bracket_deriv = proposed_directional_derivative
-        
-        #if we made it this far, we ran out of line searches and line_search failed
-        print "\nline search failed... returning"
-        #self.update_weights(-overall_step_size, direction) #restore previous weights
-        #self.model -= direction * overall_step_size
-        return 0 #line search failed
-    def interpolate_step_size(self, p1, p2):
+        #print "returning 0.0 step size"        
+        return 0.0 #line search failed
+    def interpolate_step_size(self, p1, p2): #completed
         #p1 and p2 are tuples in form (x,f(x), f'(x)) and spits out minimum step size based on cubic interpolation of data
         if abs(p2[0] - p1[0]) < 1E-4:
             #print "difference between two step sizes is small. |p2 -p1| =", abs(p2[0] - p1[0]), "returning bisect"
@@ -1130,63 +1227,322 @@ class NN_Trainer(Neural_Network):
         else: #bisect
             return (p1[0] + p2[0]) / 2
     def backprop_krylov_subspace(self):
-        pass
-    def calculate_krylov_basis(self, batch_inputs, batch_labels, prev_direction): 
+        #does backprop using krylov subspace
+        #excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
+        print "Starting backprop using krylov subspace descent"
+        print "Number of layers is", self.model.num_layers
+        
+        classification_stats = self.calculate_classification_statistics(self.features, self.labels, self.model)
+        print "cross-entropy before krylov subspace descent is", classification_stats[0]
+        print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
+        
+        prev_direction = Neural_Network_Weight(self.model.num_layers) #copy.deepcopy(self.model) * 0
+        #print self.model.get_architecture()
+        prev_direction.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True)
+        prev_direction.bias['0'][0][0] = 1
+        sub_batch_start_perc = 0.0
+        for epoch_num in range(self.num_epochs):
+            print "Epoch", epoch_num + 1, "of", self.num_epochs
+            batch_index = 0
+            end_index = 0
+            while end_index < self.num_training_examples: #run through the batches
+                per_done = float(batch_index)/self.num_training_examples*100
+                print "\r                                                                \r", #clear line
+                #sys.stdout.write("\r%.1f%% done" % per_done), sys.stdout.flush()
+                end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
+                batch_size = end_index - batch_index 
+                batch_inputs = self.features[batch_index:end_index] #:batch_index+1]
+                batch_labels = self.labels[batch_index:end_index] #:batch_index+1]
+                krylov_start_index = int(sub_batch_start_perc * batch_size)
+                bfgs_start_index = int((sub_batch_start_perc + 1.0 / self.krylov_num_batch_splits) * batch_size)
+                bfgs_end_index = int((sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) * batch_size)
+                krylov_index = [batch_index + x % batch_size for x in range(krylov_start_index, bfgs_start_index)] #[batch_index]
+                bfgs_index = [batch_index + x % batch_size for x in range(bfgs_start_index, bfgs_end_index)]
+                #print "krylov_index:", krylov_index
+                #print "bfgs_index:", bfgs_index
+                #print "krylov_start_index:", krylov_start_index, "bfgs_start_index:", bfgs_start_index, "bfgs_end_index", bfgs_end_index
+                print "part 1/3: calculating gradient", 
+                average_gradient = self.calculate_gradient(batch_inputs, batch_labels, self.model) / batch_size
+                #average_gradient.print_statistics()
+                #need to fix the what indices the batches are taken from... will always be the same subset
+                krylov_batch_inputs = self.features[krylov_index]
+                krylov_batch_labels = self.labels[krylov_index]
+                #average_gradient = self.calculate_gradient(krylov_batch_inputs, krylov_batch_labels, self.model) / (batch_size / self.krylov_num_batch_splits)
+                print "\r                                                                \r",
+                print "part 2/3: calculating krylov basis"
+                krylov_basis = self.calculate_krylov_basis(krylov_batch_inputs, krylov_batch_labels, prev_direction, average_gradient, self.model) #, preconditioner = average_gradient ** 2)
+                #some_grad = numpy.zeros(len(krylov_basis.keys())-1) #-1 for 'hessian' key
+                #print some_grad
+                #print some_grad.shape[0]
+                #for dim in range(some_grad.shape[0]):
+                #    some_grad[dim] = average_gradient.dot(krylov_basis[dim], excluded_keys) #check to see if GN matrix is PSD
+                #print some_grad
+                #sys.exit()
+                bfgs_batch_inputs = self.features[bfgs_index]
+                bfgs_batch_labels = self.labels[bfgs_index]
+                step_size = self.bfgs(bfgs_batch_inputs, bfgs_batch_labels, krylov_basis, self.krylov_num_bfgs_epochs)
+                #print "returned step size is", step_size
+                direction = krylov_basis[0] * step_size[0]
+                for basis in range(1,len(step_size)):
+                    direction += krylov_basis[basis] * step_size[basis]
+                #print "printing direction statistics"
+                #direction.print_statistics()
+                #print "printing model statistics"
+                #self.model.print_statistics()
+                self.model += direction
+                prev_direction = copy.deepcopy(direction)
+                direction.clear()
+            sub_batch_start_perc = (sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) % 1
+            targets = self.forward_pass(inputs=self.features, verbose=False, model = self.model)
+            print "cross-entropy at the end of the epoch is", self.calculate_cross_entropy(targets,self.labels)
+            print "number correctly classified is", int(self.calculate_classification_accuracy(targets, self.labels) * self.num_training_examples), "of", self.num_training_examples
+            if self.save_each_epoch:
+                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)])) 
+    def calculate_krylov_basis(self, batch_inputs, batch_labels, prev_direction, gradient = None, model = None, preconditioner = None): #need to test
+        if model == None:
+            model = self.model
+        batch_size = batch_inputs.shape[0]
         krylov_basis = {} #dictionary of weights, "directions" are weights
+        excluded_keys = {'bias': ['0'], 'weights': []}
+        krylov_basis['hessian'] = numpy.identity(self.krylov_num_directions+1)
         #will need to add preconditioning at some point
-        krylov_basis[0] = self.norm(self.calculate_gradient(batch_inputs, batch_labels)) #normed gradient for first direction
-        bfgs_hessian = numpy.zeros((self.num_krylov_directions+1,self.num_krylov_directions+1))
-        for layer_num in range(1,self.num_krylov_directions+1):
-            if layer_num < self.num_krylov_directions:
-                gauss_newton_direction = self.calculate_gauss_newton_direction(batch_inputs, krylov_basis[layer_num-1])
+        if gradient == None:
+            krylov_basis[0] = self.calculate_gradient(batch_inputs, batch_labels, model) / batch_size #normed gradient for first direction
+        else:
+            krylov_basis[0] = gradient
+        
+        if preconditioner != None:
+            krylov_basis[0] = krylov_basis[0] / preconditioner
+        
+        for basis_num in range(1,self.krylov_num_directions+1):
+            print "\r                                                                \r", #clear line
+            print "calculating basis number", basis_num, "of", self.krylov_num_directions,
+            #print "krylov basis norm is", krylov_basis[basis_num-1].norm(excluded_keys)
+            krylov_basis[basis_num-1] /= krylov_basis[basis_num-1].norm(excluded_keys)
+            if basis_num < self.krylov_num_directions:
+                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, 
+                                                                               direction = krylov_basis[basis_num-1], model = model, 
+                                                                               second_order_type = self.second_order_matrix) / batch_size
+                if preconditioner != None:
+                    second_order_direction = second_order_direction / preconditioner
+                #print "printing second_order_direction statistics"
+                #second_order_direction.print_statistics()
                 #will have to add preconditioning here
             else:
-                gauss_newton_direction = prev_direction
-            for hessian_idx in range(layer_num+1):
-                bfgs_hessian[(hessian_idx,layer_num)] = self.dot(gauss_newton_direction, krylov_basis[hessian_idx])
-                bfgs_hessian[(layer_num,hessian_idx)] = bfgs_hessian[(hessian_idx,layer_num)]
-                gauss_newton_direction = self.orthonalize_direction(gauss_newton_direction, krylov_basis[hessian_idx])
-            krylov_basis[layer_num] = self.norm(gauss_newton_direction)
-        krylov_basis['hessian'] = bfgs_hessian
+                second_order_direction = prev_direction
+            #this hessian calculation is all sorts of fucked, but I'm not using it now, MUST FIX LATER!!!!!
+            for hessian_idx in range(basis_num):
+                krylov_basis['hessian'][hessian_idx,basis_num-1] = second_order_direction.dot(krylov_basis[hessian_idx], excluded_keys)
+                krylov_basis['hessian'][basis_num-1,hessian_idx] = krylov_basis['hessian'][hessian_idx,basis_num-1]
+                #orthogonalize direction
+                second_order_direction -= krylov_basis[hessian_idx] * second_order_direction.dot(krylov_basis[hessian_idx], excluded_keys) #will be preconditioned here
+            krylov_basis[basis_num] = second_order_direction
         return krylov_basis
-    def orthonalize_direction(self, original_weight, projected_dir): #expensive, should be compiled
-        orthoged_weight = {}
-        orthog_const = self.dot(original_weight, projected_dir)
-        for layer_num in range(1,self.num_layers+1):
-            weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
-            bias_cur_layer = ''.join(['bias',str(layer_num)])
-            orthoged_weight[weight_cur_layer] = original_weight[weight_cur_layer] - orthog_const * projected_dir[weight_cur_layer]
-            orthoged_weight[bias_cur_layer] = original_weight[bias_cur_layer] - orthog_const * projected_dir[bias_cur_layer]
-        return orthoged_weight
-    def calculate_gauss_newton_direction(self, inputs, direction): #completed, need to test, expensive, should be compiled
-        #given direction, calculates out_direction = G * direction, where G is the Gauss-Newton Matrix
-        hiddens = self.forward_first_order_methods(inputs)
-        cur_layer_lin_grad = self.weight_matrix_multiply(inputs, direction['weights01'], direction['bias1']) #ndata x n_hid
-        cur_layer_deriv = hiddens[1] * (1-hiddens[1]) * cur_layer_lin_grad
-        for idx in range(1,self.num_layers):
-            weight_cur_layer = ''.join(['weights',str(idx),str(idx+1)])
-            bias_cur_layer = ''.join(['bias',str(idx+1)])
-            cur_layer_lin_grad = self.weight_matrix_multiply(cur_layer_deriv, self.weights[weight_cur_layer], self.weights[bias_cur_layer])
-            cur_layer_lin_grad += self.weight_matrix_multiply(hiddens[idx+1], direction[weight_cur_layer], direction[bias_cur_layer])
-            cur_layer_deriv = hiddens[idx+1] * (1-hiddens[idx+1]) * cur_layer_lin_grad
-        #so hiddens[self.num_layers] is ndata x n_out, and cur_layer_deriv is n_data x n_out
-        average_output = numpy.sum(hiddens[self.num_layers],axis=0)# 1 x n_out
-        average_output_deriv = numpy.sum(cur_layer_deriv, axis=0) #1 x n_out
-        cur_layer_second_deriv = numpy.transpose(average_output * (average_output_deriv - numpy.dot(average_output, average_output_deriv))) #n_out x 1
-        out_direction = {}
-        for layer_num in range(self.num_layers-1,0,-1):
-            weight_cur_layer = ''.join(['weights',str(layer_num-1),str(layer_num)])
-            weight_next_layer = ''.join(['weights',str(layer_num),str(layer_num+1)])
-            bias_cur_layer = ''.join(['bias',str(layer_num)])
-            bias_next_layer = ''.join(['bias',str(layer_num+1)])
-            hidden_second_deriv = cur_layer_second_deriv * hiddens[layer_num+1] * (1 - hiddens[layer_num+1])
-            cur_layer_second_deriv = numpy.dot(hidden_second_deriv, numpy.transpose(self.weights[weight_next_layer]))
-            out_direction[weight_next_layer] = numpy.outer(hidden_second_deriv, cur_layer_second_deriv)
-            out_direction[bias_next_layer] = numpy.sum(out_direction[weight_next_layer]) #not sure if this is right
-        return out_direction
-    def bfgs(self):
-        pass
-    
+    def calculate_second_order_direction(self, inputs, labels, direction = None, model = None, second_order_type = None): #need to test
+        #given an input direction direction, the function returns H*d, where H is the Hessian of the weight vector
+        #the function does this efficient by using the Pearlmutter (1994) trick
+        if model == None:
+            model = self.model
+        if direction == None:
+            direction = self.calculate_gradient(inputs, labels, model)
+        if second_order_type == None:
+            second_order_type='gauss-newton' #other option is 'hessian'
+        #print "printing model statistics"
+        #model.print_statistics()
+        #print "printing direction statistics"
+        #direction.print_statistics()
+        #print "********************************************"
+        hiddens = self.forward_first_order_methods(inputs, model)
+        #for layer_num in range(model.num_layers+1):
+        #    print "At layer", layer_num
+        #    print "hiddens min is", numpy.min(hiddens[layer_num])
+        #    print "hiddens max is", numpy.max(hiddens[layer_num])
+        #    print "hiddens mean is", numpy.mean(hiddens[layer_num])
+        #    print "hiddens var is", numpy.var(hiddens[layer_num])
+        hidden_deriv = self.pearlmutter_forward_pass(labels, hiddens, model, direction) #nbatch x nout
+        
+        #for layer_num in range(1,model.num_layers+1):
+        #    print "At layer", layer_num
+        #    print "hidden_deriv min is", numpy.min(hidden_deriv[layer_num])
+        #    print "hidden_deriv max is", numpy.max(hidden_deriv[layer_num])
+        #    print "hidden_deriv mean is", numpy.mean(hidden_deriv[layer_num])
+        #    print "hidden_deriv var is", numpy.var(hidden_deriv[layer_num])
+        if second_order_type == 'gauss-newton':
+            # (diag(p) - p*p') * d = p .* d - p * p'd, where p = hiddens[model.num_layers] and d = hidden_deriv[model.num_layers]
+            #ref_mat = numpy.zeros(hiddens[model.num_layers].shape)
+            #for batch in range(hiddens[model.num_layers].shape[0]):
+            #    second_order_mat = numpy.diag(hiddens[model.num_layers][batch]) - numpy.outer(hiddens[model.num_layers][batch], hiddens[model.num_layers][batch])
+            #print second_order_mat.shape
+            #print hidden_deriv[model.num_layers].shape
+            #    ref_mat[batch] = numpy.dot(hidden_deriv[model.num_layers][batch], second_order_mat) 
+            #U,s,V = numpy.linalg.svd(second_order_mat)
+            #print s
+            gauss_vec = hidden_deriv[model.num_layers] * hiddens[model.num_layers] #p .* d nbatch x ndim
+            #print gauss_vec.shape
+            #print gauss_vec
+            #print type(gauss_vec)
+            #print numpy.sum(gauss_vec, axis=1)
+            #print numpy.sum(gauss_vec, axis=1).shape
+            #output = numpy.zeros(hiddens[model.num_layers].shape[0])
+            #for idx in range(hiddens[model.num_layers].shape[0]):
+            #    output[idx] = numpy.dot(hiddens[model.num_layers][idx], hidden_deriv[model.num_layers][idx])
+            #print output
+            #print output.shape
+            #outish = hiddens[model.num_layers] * numpy.sum(gauss_vec, axis=1)[:,numpy.newaxis]
+            #print outish.shape
+            
+            gauss_vec -= hiddens[model.num_layers] * numpy.sum(gauss_vec, axis=1)[:,numpy.newaxis] #numpy.transpose(numpy.tile(numpy.sum(gauss_vec, axis=1), (hidden_deriv[model.num_layers].shape[1],1)))
+            #print gauss_vec - ref_mat
+            #gauss_vec = ref_mat #* hiddens[model.num_layers] * (1 - hiddens[model.num_layers])
+            #gauss_vec *= hiddens[model.num_layers] * (1 - hiddens[model.num_layers]) #uncomment this to get 52653 after 15 epochs
+            #print gauss_vec.shape
+            #print "entering backward_pass"
+            return self.backward_pass(gauss_vec, hiddens, model)
+        elif second_order_type == 'hessian':
+            print "hessian not yet implemented. Exiting now..."
+            sys.exit()
+    def calculate_classification_statistics(self, features, labels, model=None):
+        if model == None:
+            model = self.model
+            
+        if self.do_backprop == False:
+            classification_batch_size = 4096
+        else:
+            classification_batch_size = self.backprop_batch_size
+        
+        batch_index = 0
+        end_index = 0
+        cross_entropy = 0.0
+        num_correct = 0
+        num_examples = features.shape[0]
+        while end_index < self.num_training_examples: #run through the batches
+            end_index = min(batch_index+classification_batch_size, num_examples)
+            output = self.forward_pass(features[batch_index:end_index], verbose=False, model=model)
+            cross_entropy += self.calculate_cross_entropy(output, labels[batch_index:end_index])
+            
+            #don't use calculate_classification_accuracy() because of possible rounding error
+            prediction = output.argmax(axis=1).reshape(labels[batch_index:end_index].shape)
+            num_correct += numpy.sum(prediction == labels[batch_index:end_index])
+            batch_index += classification_batch_size
+        
+        return [cross_entropy, num_correct, num_examples]
+    def pearlmutter_forward_pass(self, labels, hiddens, model, direction): #need to test
+        #hiddens[0] are the inputs
+        hidden_deriv = {}
+        hidden_deriv[1] = self.weight_matrix_multiply(hiddens[0], direction.weights['01'], direction.bias['1']) * hiddens[1] * (1-hiddens[1])
+        for layer_num in range(1,model.num_layers-1):
+            weight_cur_layer = ''.join([str(layer_num), str(layer_num+1)])
+            bias_cur_layer = str(layer_num+1)
+            hidden_deriv[layer_num+1] = ((self.weight_matrix_multiply(hiddens[layer_num], direction.weights[weight_cur_layer], 
+                                                                      direction.bias[bias_cur_layer]) +
+                                          self.weight_matrix_multiply(hidden_deriv[layer_num], model.weights[weight_cur_layer], 
+                                                                      model.bias[bias_cur_layer])) *
+                                          hiddens[layer_num+1] * (1-hiddens[layer_num+1]) )
+        #update last layer, assuming logistic regression
+        
+        
+        weight_cur_layer = ''.join([str(model.num_layers-1), str(model.num_layers)])
+        bias_cur_layer = str(model.num_layers)
+        #hidden_deriv[model.num_layers] = hiddens[model.num_layers]
+        #for index in range(labels.size):
+        #    hidden_deriv[model.num_layers][index, labels[index]] -= 1
+        hidden_deriv[model.num_layers] = (self.weight_matrix_multiply(hiddens[model.num_layers-1], direction.weights[weight_cur_layer], 
+                                                                       direction.bias[bias_cur_layer]) +
+                                           self.weight_matrix_multiply(hidden_deriv[model.num_layers-1], model.weights[weight_cur_layer], 
+                                                                       model.bias[bias_cur_layer]))
+        return hidden_deriv
+    def bfgs(self, batch_inputs, batch_labels, basis, num_epochs, model = None): #need to test
+        #helper function for Krylov subspace methods
+        #given a basis of n directions B, bfgs attempts
+        #to find the optimal step size a (which is an element of R^n)
+        #such that w_0 + B*a gives the lowest error
+        print "in bfgs"
+        if model == None:
+            model = self.model
+        
+        excluded_keys = {'bias': ['0'], 'weights': []}
+            
+        cur_step = numpy.zeros(self.krylov_num_directions + 1)
+        cur_gradient = copy.deepcopy(cur_step)
+        prev_gradient = copy.deepcopy(cur_step)
+        #finite_diff_approx = copy.deepcopy(cur_step)
+        bfgs_mat = numpy.identity(self.krylov_num_directions + 1)
+        identity_mat = numpy.identity(self.krylov_num_directions + 1)
+        batch_size = batch_inputs.shape[0]
+        gradient = self.calculate_gradient(batch_inputs, batch_labels, model) / batch_size
+        init_step_size = 1.0
+        for dim in range(self.krylov_num_directions+1):
+            cur_gradient[dim] = gradient.dot(basis[dim], excluded_keys)
+            #finite_diff_approx[dim] = ((self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=model + basis[dim] * 0.0005), batch_labels) 
+            #                            - (self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=model), batch_labels)) )
+            #                           / 0.0005 / batch_size)
+        #print "cur_gradient is\n", cur_gradient
+        #print "finite diff approximation is\n", finite_diff_approx
+        cur_direction = basis[0] * 0.0
+        #print finite_diff_approx / cur_gradient
+        for epoch in range(num_epochs):
+            print "\r                                                                \r", #clear line
+            sys.stdout.write("\rbfgs epoch %d of %d" % (epoch+1, num_epochs)), sys.stdout.flush()
+            #print "bfgs matrix is"
+            #print bfgs_mat
+            #print "current gradient is"
+            #print cur_gradient
+            provisional_mix = -numpy.dot(bfgs_mat, cur_gradient)
+            #print "provisional mix is", provisional_mix
+            direction = basis[0] * provisional_mix[0]
+            for dim in range(1, self.krylov_num_directions+1):
+                direction += basis[dim] * provisional_mix[dim]
+            #dir_derivative = gradient.dot(direction, excluded_keys)
+            #print ", before line search, directional derivative is", dir_derivative
+            #if abs(dir_derivative) > 10000:
+            #    return cur_step
+            step = self.line_search(batch_inputs, batch_labels, direction, max_step_size=1.5, 
+                                    max_line_searches=self.num_line_searches, init_step_size=init_step_size, 
+                                    model = model + cur_direction)
+            if step == 0.0:
+                print "\rline search failed, returning current step", #not updating any parameters"
+                return cur_step
+            else:
+                #print "step size after line search is", step,
+                prev_step = copy.deepcopy(cur_step)
+                #print "prev step before update is", prev_step
+                cur_step += provisional_mix * step
+                #print "after update"
+                #print "prev step", prev_step
+                #print "cur_step", cur_step
+            
+            #direction = basis[0] * provisional_mix[0]
+            cur_direction = basis[0] * cur_step[0]
+            for dim in range(1,self.krylov_num_directions+1):
+                cur_direction += basis[dim] * cur_step[dim]
+            
+            prev_gradient = copy.deepcopy(cur_gradient)
+            
+            gradient = self.calculate_gradient(batch_inputs, batch_labels, model = model + cur_direction) / batch_size
+            for dim in range(self.krylov_num_directions+1):
+                cur_gradient[dim] = gradient.dot(basis[dim], excluded_keys)
+            
+            step_condition = cur_step - prev_step
+            grad_condition = cur_gradient - prev_gradient
+            #print "step condition is", step_condition
+            #print "grad condition is", grad_condition
+            #print "curvature value is", numpy.dot(step_condition, grad_condition)
+            #if epoch == 0:
+            #    bfgs_mat *= numpy.dot(step_condition,grad_condition) / numpy.dot(grad_condition,grad_condition)
+            curvature_condition = numpy.dot(step_condition, grad_condition)
+            #print "denominator is", den
+            bfgs_mat = numpy.dot(bfgs_mat, (identity_mat - numpy.outer(grad_condition, step_condition) / curvature_condition))
+            bfgs_mat = numpy.dot((identity_mat - numpy.outer(step_condition, grad_condition) / curvature_condition), bfgs_mat)
+            bfgs_mat += numpy.outer(step_condition, step_condition) / curvature_condition
+            U,s,V = numpy.linalg.svd(bfgs_mat)
+            #print "singular values of bfgs matrix are", s
+            condition_number = max(s) / min(s)
+            if condition_number > 10000.0:
+                print "condition number of bfgs matrix is too high:", condition_number, "so returning current step"
+                return cur_step
+            #print "BFGS matrix after update is"
+            #print bfgs_mat
+        return cur_step
 if __name__ == '__main__':
     script_name, config_filename = sys.argv
     print "Opening config file: %s" % config_filename

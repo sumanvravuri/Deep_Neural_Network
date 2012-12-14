@@ -17,6 +17,7 @@ Oct 11, 2012 fixed error in backprop_steepest_descent
 import sys
 import numpy
 import scipy.io as sp
+import scipy.linalg as sl
 import math
 import copy
 
@@ -424,11 +425,12 @@ class Neural_Network_Weight(object):
         return self
     def __pow__(self, scalar):
         scalar = float(scalar)
+        nn_output = copy.deepcopy(self)
         for key in self.bias.keys():
-            self.bias[key] = self.bias[key] ** scalar
+            nn_output.bias[key] = self.bias[key] ** scalar
         for key in self.weights.keys():
-            self.weights[key] = self.weights[key] ** scalar
-        return self
+            nn_output.weights[key] = self.weights[key] ** scalar
+        return nn_output
     def __copy__(self):
         return Neural_Network_Weight(self.num_layers, self.weights, self.bias, self.weight_type)
     def __deepcopy__(self, memo):
@@ -456,10 +458,12 @@ class Neural_Network(object, Vector_Math):
                                'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 'save_each_epoch',
                                'do_pretrain', 'pretrain_method', 'pretrain_iterations', 
                                'pretrain_learning_rate', 'pretrain_batch_size',
-                               'do_backprop', 'backprop_method', 'backprop_batch_size', 'steepest_learning_rate',
+                               'do_backprop', 'backprop_method', 'backprop_batch_size',
                                'num_epochs', 'num_line_searches', 'armijo_const', 'wolfe_const',
+                               'steepest_learning_rate',
                                'conjugate_max_iterations', 'conjugate_const_type',
-                               'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix']
+                               'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix',
+                               'use_hessian_preconditioner', 'use_fisher_preconditioner', 'krylov_eigenvalue_floor_const']
         self.required_variables['test'] =  ['mode', 'feature_file_name', 'weight_matrix_name', 'output_name']
         self.all_variables['test'] =  self.required_variables['test'] + ['label_file_name']
     def dump_config_vals(self):
@@ -789,13 +793,13 @@ class NN_Trainer(Neural_Network):
                 self.num_epochs = self.default_variable_define(config_dictionary, 'num_epochs', default_value=20, arg_type='int')
                 #do line search
                 self.num_line_searches = self.default_variable_define(config_dictionary, 'num_line_searches', default_value=20, arg_type='int')
-                self.armijo_const = self.default_variable_define(config_dictionary, 'armijo_const', arg_type='float', default_value=0.1)
-                self.wolfe_const = self.default_variable_define(config_dictionary, 'wolfe_const', arg_type='float', default_value=0.2)
                 if self.backprop_method == 'conjugate_gradient':
                     self.conjugate_max_iterations = self.default_variable_define(config_dictionary, 'conjugate_max_iterations', default_value=3, 
                                                                                  arg_type='int')
                     self.conjugate_const_type = self.default_variable_define(config_dictionary, 'conjugate_const_type', arg_type='string', default_value='polak-ribiere', 
                                                                              acceptable_values = ['polak-ribiere', 'polak-ribiere+', 'hestenes-stiefel', 'fletcher-reeves'])
+                    self.armijo_const = self.default_variable_define(config_dictionary, 'armijo_const', arg_type='float', default_value=0.1)
+                    self.wolfe_const = self.default_variable_define(config_dictionary, 'wolfe_const', arg_type='float', default_value=0.2)
                 elif self.backprop_method == 'krylov_subspace':
                     self.second_order_matrix = self.default_variable_define(config_dictionary, 'second_order_matrix', arg_type='string', default_value='gauss-newton', 
                                                                             acceptable_values=['gauss-newton', 'hessian'])
@@ -804,6 +808,12 @@ class NN_Trainer(Neural_Network):
                     self.krylov_num_batch_splits = self.default_variable_define(config_dictionary, 'krylov_num_batch_splits', arg_type='int', default_value=self.krylov_num_directions, 
                                                                                 acceptable_values=range(2,2000))
                     self.krylov_num_bfgs_epochs = self.default_variable_define(config_dictionary, 'krylov_num_bfgs_epochs', arg_type='int', default_value=self.krylov_num_directions)
+                    self.krylov_use_hessian_preconditioner = self.default_variable_define(config_dictionary, 'krylov_use_hessian_preconditioner', arg_type='boolean', default_value=True)
+                    if self.krylov_use_hessian_preconditioner:
+                        self.krylov_eigenvalue_floor_const = self.default_variable_define(config_dictionary, 'krylov_eigenvalue_floor_const', arg_type='float', default_value=1E-4)
+                    self.use_fisher_preconditioner = self.default_variable_define(config_dictionary, 'use_fisher_preconditioner', arg_type='boolean', default_value=False)
+                    self.armijo_const = self.default_variable_define(config_dictionary, 'armijo_const', arg_type='float', default_value=0.0001)
+                    self.wolfe_const = self.default_variable_define(config_dictionary, 'wolfe_const', arg_type='float', default_value=0.9)
         self.dump_config_vals()
     def train(self): #completed
         if self.do_pretrain:
@@ -1143,7 +1153,7 @@ class NN_Trainer(Neural_Network):
                 proposed_loss = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False,
                                                                                model = model + direction * step_size), batch_labels)
             except FloatingPointError:
-                print "encountered floating point error (likely under/overflow during forward pass, so decreasing step size by 1/2"
+                print "encountered floating point error (likely under/overflow during forward pass), so decreasing step size by 1/2"
                 step_size /= 2
                 continue
             if math.isinf(proposed_loss) or math.isnan(proposed_loss): #numerical stability issues
@@ -1228,7 +1238,7 @@ class NN_Trainer(Neural_Network):
             return (p1[0] + p2[0]) / 2
     def backprop_krylov_subspace(self):
         #does backprop using krylov subspace
-        #excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
+        excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
         print "Starting backprop using krylov subspace descent"
         print "Number of layers is", self.model.num_layers
         
@@ -1241,13 +1251,13 @@ class NN_Trainer(Neural_Network):
         prev_direction.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True)
         prev_direction.bias['0'][0][0] = 1
         sub_batch_start_perc = 0.0
+        preconditioner = None
         for epoch_num in range(self.num_epochs):
             print "Epoch", epoch_num + 1, "of", self.num_epochs
             batch_index = 0
             end_index = 0
             while end_index < self.num_training_examples: #run through the batches
-                per_done = float(batch_index)/self.num_training_examples*100
-                print "\r                                                                \r", #clear line
+                #per_done = float(batch_index)/self.num_training_examples*100
                 #sys.stdout.write("\r%.1f%% done" % per_done), sys.stdout.flush()
                 end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
                 batch_size = end_index - batch_index 
@@ -1261,16 +1271,42 @@ class NN_Trainer(Neural_Network):
                 #print "krylov_index:", krylov_index
                 #print "bfgs_index:", bfgs_index
                 #print "krylov_start_index:", krylov_start_index, "bfgs_start_index:", bfgs_start_index, "bfgs_end_index", bfgs_end_index
-                print "part 1/3: calculating gradient", 
+                sys.stdout.write("\r                                                                \r") #clear line
+                sys.stdout.write("part 1/3: calculating gradient"), sys.stdout.flush()
                 average_gradient = self.calculate_gradient(batch_inputs, batch_labels, self.model) / batch_size
                 #average_gradient.print_statistics()
                 #need to fix the what indices the batches are taken from... will always be the same subset
                 krylov_batch_inputs = self.features[krylov_index]
                 krylov_batch_labels = self.labels[krylov_index]
                 #average_gradient = self.calculate_gradient(krylov_batch_inputs, krylov_batch_labels, self.model) / (batch_size / self.krylov_num_batch_splits)
-                print "\r                                                                \r",
-                print "part 2/3: calculating krylov basis"
-                krylov_basis = self.calculate_krylov_basis(krylov_batch_inputs, krylov_batch_labels, prev_direction, average_gradient, self.model) #, preconditioner = average_gradient ** 2)
+                sys.stdout.write("\r                                                                \r")
+                sys.stdout.write("part 2/3: calculating krylov basis"), sys.stdout.flush()
+                if self.use_fisher_preconditioner:
+                    preconditioner = average_gradient ** 2
+                    preconditioner = preconditioner.clip(preconditioner.max(excluded_keys) * 1E-4, float("Inf"), excluded_keys)
+                
+                krylov_basis = self.calculate_krylov_basis(krylov_batch_inputs, krylov_batch_labels, prev_direction, average_gradient, self.model, preconditioner) #, preconditioner = average_gradient ** 2)
+                if self.krylov_use_hessian_preconditioner:
+                    eigenvalues, eigenvectors = numpy.linalg.eig(krylov_basis['hessian'])
+                    #U,singular_values,V = numpy.linalg.svd(krylov_basis['hessian'])
+                    #numpy.clip(singular_values, numpy.max(singular_values) * self.krylov_eigenvalue_floor_const, float("Inf"), out=singular_values)
+                    #projection_matrix = numpy.dot(U, numpy.diag(1. / numpy.sqrt(singular_values)))
+                    #krylov_basis_copy = {}
+                    #for idx in range(self.krylov_num_directions+1):
+                    #    krylov_basis_copy[idx] = krylov_basis[0] * projection_matrix[0][idx]
+                        
+                    #for krylov_idx in range(0,self.krylov_num_directions+1):
+                    #    for projection_idx in range(1,self.krylov_num_directions+1):
+                    #        krylov_basis_copy[krylov_idx] += krylov_basis[projection_idx] * projection_matrix[projection_idx][krylov_idx]
+                    #del krylov_basis
+                    #krylov_basis = krylov_basis_copy
+                    numpy.clip(eigenvalues, numpy.max(eigenvalues) * self.krylov_eigenvalue_floor_const, float("Inf"), out=eigenvalues)
+                    inv_hessian_cond = numpy.dot(numpy.dot(eigenvectors, numpy.diag(1./eigenvalues)),numpy.transpose(eigenvectors))
+                    inv_chol_factor = sl.cholesky(inv_hessian_cond) #numpy version gives lower triangular, scipy gives ut
+                    for basis_num in range(self.krylov_num_directions+1):
+                        krylov_basis[basis_num] *= inv_chol_factor[basis_num][basis_num]
+                        for basis_mix_idx in range(basis_num+1,self.krylov_num_directions+1):
+                            krylov_basis[basis_num] += krylov_basis[basis_mix_idx] * inv_chol_factor[basis_num][basis_mix_idx]
                 #some_grad = numpy.zeros(len(krylov_basis.keys())-1) #-1 for 'hessian' key
                 #print some_grad
                 #print some_grad.shape[0]
@@ -1280,6 +1316,8 @@ class NN_Trainer(Neural_Network):
                 #sys.exit()
                 bfgs_batch_inputs = self.features[bfgs_index]
                 bfgs_batch_labels = self.labels[bfgs_index]
+                sys.stdout.write("\r                                                                \r")
+                sys.stdout.write("part 3/3: calculating mix of krylov basis using bfgs"), sys.stdout.flush()
                 step_size = self.bfgs(bfgs_batch_inputs, bfgs_batch_labels, krylov_basis, self.krylov_num_bfgs_epochs)
                 #print "returned step size is", step_size
                 direction = krylov_basis[0] * step_size[0]
@@ -1292,6 +1330,7 @@ class NN_Trainer(Neural_Network):
                 self.model += direction
                 prev_direction = copy.deepcopy(direction)
                 direction.clear()
+            #sub_batch_start_perc = (sub_batch_start_perc + 1.0 / self.krylov_num_batch_splits) % 1 #not sure if this is better, below line is what I used to get krylov results
             sub_batch_start_perc = (sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) % 1
             targets = self.forward_pass(inputs=self.features, verbose=False, model = self.model)
             print "cross-entropy at the end of the epoch is", self.calculate_cross_entropy(targets,self.labels)
@@ -1315,28 +1354,40 @@ class NN_Trainer(Neural_Network):
             krylov_basis[0] = krylov_basis[0] / preconditioner
         
         for basis_num in range(1,self.krylov_num_directions+1):
-            print "\r                                                                \r", #clear line
-            print "calculating basis number", basis_num, "of", self.krylov_num_directions,
+            sys.stdout.write("\r                                                                \r")
+            sys.stdout.write("calculating basis number %d of %d" % (basis_num, self.krylov_num_directions)), sys.stdout.flush()
             #print "krylov basis norm is", krylov_basis[basis_num-1].norm(excluded_keys)
             krylov_basis[basis_num-1] /= krylov_basis[basis_num-1].norm(excluded_keys)
-            if basis_num < self.krylov_num_directions:
-                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, 
-                                                                               direction = krylov_basis[basis_num-1], model = model, 
-                                                                               second_order_type = self.second_order_matrix) / batch_size
-                if preconditioner != None:
-                    second_order_direction = second_order_direction / preconditioner
+            #if basis_num < self.krylov_num_directions:
+            second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, 
+                                                                           direction = krylov_basis[basis_num-1], model = model, 
+                                                                           second_order_type = self.second_order_matrix) / batch_size
                 #print "printing second_order_direction statistics"
                 #second_order_direction.print_statistics()
                 #will have to add preconditioning here
+
+            if preconditioner != None and basis_num < self.krylov_num_directions:
+                basis_direction = second_order_direction / preconditioner
+            elif basis_num < self.krylov_num_directions:
+                basis_direction = second_order_direction
             else:
-                second_order_direction = prev_direction
-            #this hessian calculation is all sorts of fucked, but I'm not using it now, MUST FIX LATER!!!!!
+                basis_direction = prev_direction
+                
+                #this hessian calculation is all sorts of fucked, but I'm not using it now, MUST FIX LATER!!!!!
             for hessian_idx in range(basis_num):
-                krylov_basis['hessian'][hessian_idx,basis_num-1] = second_order_direction.dot(krylov_basis[hessian_idx], excluded_keys)
-                krylov_basis['hessian'][basis_num-1,hessian_idx] = krylov_basis['hessian'][hessian_idx,basis_num-1]
+                if self.krylov_use_hessian_preconditioner:
+                    krylov_basis['hessian'][hessian_idx,basis_num-1] = second_order_direction.dot(krylov_basis[hessian_idx], excluded_keys)
+                    krylov_basis['hessian'][basis_num-1,hessian_idx] = krylov_basis['hessian'][hessian_idx,basis_num-1]
                 #orthogonalize direction
-                second_order_direction -= krylov_basis[hessian_idx] * second_order_direction.dot(krylov_basis[hessian_idx], excluded_keys) #will be preconditioned here
-            krylov_basis[basis_num] = second_order_direction
+                basis_direction -= krylov_basis[hessian_idx] * basis_direction.dot(krylov_basis[hessian_idx], excluded_keys) #will be preconditioned here
+            krylov_basis[basis_num] = basis_direction
+        if self.krylov_use_hessian_preconditioner:
+            second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, 
+                                                                           direction = second_order_direction, model = model, 
+                                                                           second_order_type = self.second_order_matrix) / batch_size
+            for hessian_idx in range(self.krylov_num_directions+1):
+                krylov_basis['hessian'][hessian_idx,self.krylov_num_directions] = second_order_direction.dot(krylov_basis[hessian_idx], excluded_keys)
+                krylov_basis['hessian'][self.krylov_num_directions,hessian_idx] = krylov_basis['hessian'][hessian_idx,self.krylov_num_directions]
         return krylov_basis
     def calculate_second_order_direction(self, inputs, labels, direction = None, model = None, second_order_type = None): #need to test
         #given an input direction direction, the function returns H*d, where H is the Hessian of the weight vector
@@ -1440,7 +1491,6 @@ class NN_Trainer(Neural_Network):
                                           hiddens[layer_num+1] * (1-hiddens[layer_num+1]) )
         #update last layer, assuming logistic regression
         
-        
         weight_cur_layer = ''.join([str(model.num_layers-1), str(model.num_layers)])
         bias_cur_layer = str(model.num_layers)
         #hidden_deriv[model.num_layers] = hiddens[model.num_layers]
@@ -1456,7 +1506,6 @@ class NN_Trainer(Neural_Network):
         #given a basis of n directions B, bfgs attempts
         #to find the optimal step size a (which is an element of R^n)
         #such that w_0 + B*a gives the lowest error
-        print "in bfgs"
         if model == None:
             model = self.model
         
@@ -1482,7 +1531,7 @@ class NN_Trainer(Neural_Network):
         #print finite_diff_approx / cur_gradient
         for epoch in range(num_epochs):
             print "\r                                                                \r", #clear line
-            sys.stdout.write("\rbfgs epoch %d of %d" % (epoch+1, num_epochs)), sys.stdout.flush()
+            sys.stdout.write("\rbfgs epoch %d of %d\r" % (epoch+1, num_epochs)), sys.stdout.flush()
             #print "bfgs matrix is"
             #print bfgs_mat
             #print "current gradient is"
@@ -1494,13 +1543,11 @@ class NN_Trainer(Neural_Network):
                 direction += basis[dim] * provisional_mix[dim]
             #dir_derivative = gradient.dot(direction, excluded_keys)
             #print ", before line search, directional derivative is", dir_derivative
-            #if abs(dir_derivative) > 10000:
-            #    return cur_step
             step = self.line_search(batch_inputs, batch_labels, direction, max_step_size=1.5, 
                                     max_line_searches=self.num_line_searches, init_step_size=init_step_size, 
                                     model = model + cur_direction)
             if step == 0.0:
-                print "\rline search failed, returning current step", #not updating any parameters"
+                print "\rline search failed, returning current step\r", #not updating any parameters"
                 return cur_step
             else:
                 #print "step size after line search is", step,
@@ -1537,8 +1584,8 @@ class NN_Trainer(Neural_Network):
             U,s,V = numpy.linalg.svd(bfgs_mat)
             #print "singular values of bfgs matrix are", s
             condition_number = max(s) / min(s)
-            if condition_number > 10000.0:
-                print "condition number of bfgs matrix is too high:", condition_number, "so returning current step"
+            if condition_number > 30000.0:
+                print "condition number of bfgs matrix is too high:", condition_number, "so returning current step\r"
                 return cur_step
             #print "BFGS matrix after update is"
             #print bfgs_mat

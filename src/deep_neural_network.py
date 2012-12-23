@@ -18,6 +18,7 @@ import sys
 import numpy
 import scipy.io as sp
 import scipy.linalg as sl
+import scipy.optimize as sopt
 import math
 import copy
 
@@ -134,6 +135,17 @@ class Neural_Network_Weight(object):
         return nn_output
     def get_architecture(self):
         return [self.bias[str(layer_num)].size for layer_num in range(self.num_layers+1) ]
+    def size(self, excluded_keys = {'bias': [], 'weights': []}):
+        numel = 0
+        for key in self.bias.keys():
+            if key in excluded_keys['bias']:
+                continue
+            numel += self.bias[key].size
+        for key in self.weights.keys():
+            if key in excluded_keys['weights']:
+                continue  
+            numel += self.weights[key].size
+        return numel
     def open_weights(self, weight_matrix_name): #completed
         #the weight file format is very specific, it contains the following variables:
         #weights01, weights12, weights23, ...
@@ -316,19 +328,26 @@ class Neural_Network_Weight(object):
         for key in self.weights.keys():
             nn_output.weights[key] = -self.weights[key]
         return nn_output
-    def __add__(self,nn_weight2):
-        if type(nn_weight2) is not Neural_Network_Weight:
-            print "argument must be of type Neural_Network_Weight... instead of type", type(nn_weight2), "Exiting now..."
-            sys.exit()
-        if self.get_architecture() != nn_weight2.get_architecture():
-            print "Neural net models do not match... Exiting now"
-            sys.exit()
+    def __add__(self,addend):
         nn_output = copy.deepcopy(self)
+        if type(addend) is Neural_Network_Weight:
+            if self.get_architecture() != addend.get_architecture():
+                print "Neural net models do not match... Exiting now"
+                sys.exit()
+            
+            for key in self.bias.keys():
+                nn_output.bias[key] = self.bias[key] + addend.bias[key]
+            for key in self.weights.keys():
+                nn_output.weights[key] = self.weights[key] + addend.weights[key]
+            return nn_output
+        #otherwise type is scalar
+        addend = float(addend)
         for key in self.bias.keys():
-            nn_output.bias[key] = self.bias[key] + nn_weight2.bias[key]
+            nn_output.bias[key] = self.bias[key] + addend
         for key in self.weights.keys():
-            nn_output.weights[key] = self.weights[key] + nn_weight2.weights[key]
+            nn_output.weights[key] = self.weights[key] + addend
         return nn_output
+        
     def __sub__(self,nn_weight2):
         if type(nn_weight2) is not Neural_Network_Weight:
             print "argument must be of type Neural_Network_Weight... instead of type", type(nn_weight2), "Exiting now..."
@@ -463,7 +482,7 @@ class Neural_Network(object, Vector_Math):
                                'steepest_learning_rate',
                                'conjugate_max_iterations', 'conjugate_const_type',
                                'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix',
-                               'use_hessian_preconditioner', 'use_fisher_preconditioner', 'krylov_eigenvalue_floor_const']
+                               'krylov_use_hessian_preconditioner', 'use_fisher_preconditioner', 'krylov_eigenvalue_floor_const']
         self.required_variables['test'] =  ['mode', 'feature_file_name', 'weight_matrix_name', 'output_name']
         self.all_variables['test'] =  self.required_variables['test'] + ['label_file_name']
     def dump_config_vals(self):
@@ -626,10 +645,26 @@ class Neural_Network(object, Vector_Math):
             return self.softmax(self.weight_matrix_multiply(inputs, weights, biases))
         elif weight_type == 'rbm_gaussian_bernoulli' or weight_type == 'rbm_bernoulli_bernoulli':
             return self.sigmoid(self.weight_matrix_multiply(inputs, weights, biases))
+        #added to test finite differences calculation for pearlmutter forward pass
+        elif weight_type == 'linear':
+            return self.weight_matrix_multiply(inputs, weights, biases)
         else:
             print "weight_type", weight_type, "is not a valid layer type.",
             print "Valid layer types are", self.model.valid_layer_types,"Exiting now..."
             sys.exit()
+    def forward_pass_linear(self, inputs, verbose=True, model=None):
+        #to test finite differences calculation for pearlmutter forward pass, just like forward pass, except it spits linear outputs
+        if model == None:
+            model = self.model 
+        cur_layer = inputs
+        for layer_num in range(1,model.num_layers+1):
+            if verbose:
+                print "At layer", layer_num, "of", model.num_layers
+            weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
+            bias_cur_layer = str(layer_num)
+            cur_layer = self.forward_layer(cur_layer, model.weights[weight_cur_layer], 
+                                           model.bias[bias_cur_layer], 'linear')
+        return cur_layer
     def forward_pass(self, inputs, verbose=True, model=None): #completed
         # forward pass each layer starting with feature level
         if model == None:
@@ -1059,7 +1094,7 @@ class NN_Trainer(Neural_Network):
         #calculate gradient with particular Neural Network model. If None is specified, will use current weights (i.e., self.model)
         if model == None:
             model = self.model
-        gradient = copy.deepcopy(model)
+        #gradient = copy.deepcopy(model)
         batch_size = batch_inputs.shape[0]
         
         hiddens = self.forward_first_order_methods(batch_inputs, model)
@@ -1069,20 +1104,30 @@ class NN_Trainer(Neural_Network):
         for index in range(batch_size):
             weight_vec[index, batch_labels[index]] -= 1
         
-        #average layers in batch
-        weight_cur_layer = ''.join([str(model.num_layers-1),str(model.num_layers)])
+        return self.backward_pass(weight_vec, hiddens, model)
+    def calculate_fisher_diag_matrix(self, batch_inputs, batch_labels, model=None):
+        if model == None:
+            model = self.model
+        output_model = Neural_Network_Weight(num_layers=model.num_layers)
+        output_model.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
+        batch_size = batch_inputs.shape[0]
+        hiddens = self.forward_first_order_methods(batch_inputs, model)
+        weight_vec = hiddens[model.num_layers]
+        for index in range(batch_size):
+            weight_vec[index, batch_labels[index]] -= 1
+        weight_cur_layer = ''.join([str(model.num_layers-1), str(model.num_layers)])
         bias_cur_layer = str(model.num_layers)
-        gradient.bias[bias_cur_layer][0] = sum(weight_vec)
-        gradient.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[model.num_layers-1]), weight_vec)
+        output_model.bias[bias_cur_layer][0] = sum(weight_vec**2)
+        output_model.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[model.num_layers-1]**2), weight_vec**2)
         #propagate to sigmoid layers
         for layer_num in range(model.num_layers-1,0,-1):
             weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
             weight_next_layer = ''.join([str(layer_num),str(layer_num+1)])
             bias_cur_layer = str(layer_num)
             weight_vec = numpy.dot(weight_vec, numpy.transpose(model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out)
-            gradient.bias[bias_cur_layer][0] = sum(weight_vec)
-            gradient.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
-        return gradient
+            output_model.bias[bias_cur_layer][0] = sum(weight_vec**2) #this is somewhat ugly
+            output_model.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[layer_num-1]**2), weight_vec**2)
+        return output_model
     def backward_pass(self, backward_inputs, hiddens, model=None): #need to test
         if model == None:
             model = self.model
@@ -1274,6 +1319,7 @@ class NN_Trainer(Neural_Network):
                 sys.stdout.write("\r                                                                \r") #clear line
                 sys.stdout.write("part 1/3: calculating gradient"), sys.stdout.flush()
                 average_gradient = self.calculate_gradient(batch_inputs, batch_labels, self.model) / batch_size
+                
                 #average_gradient.print_statistics()
                 #need to fix the what indices the batches are taken from... will always be the same subset
                 krylov_batch_inputs = self.features[krylov_index]
@@ -1282,31 +1328,40 @@ class NN_Trainer(Neural_Network):
                 sys.stdout.write("\r                                                                \r")
                 sys.stdout.write("part 2/3: calculating krylov basis"), sys.stdout.flush()
                 if self.use_fisher_preconditioner:
-                    preconditioner = average_gradient ** 2
+                    weightcost = 2E-5
+                    alpha = 1E-5
+                    preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, self.model) / batch_size
+                    # add regularization
+                    #preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
+                    preconditioner = (preconditioner + weightcost) ** (3./4.)
+                    
                     preconditioner = preconditioner.clip(preconditioner.max(excluded_keys) * 1E-4, float("Inf"), excluded_keys)
-                
+                    #preconditioner.print_statistics()
+                    #sys.exit()
+                    
                 krylov_basis = self.calculate_krylov_basis(krylov_batch_inputs, krylov_batch_labels, prev_direction, average_gradient, self.model, preconditioner) #, preconditioner = average_gradient ** 2)
                 if self.krylov_use_hessian_preconditioner:
-                    eigenvalues, eigenvectors = numpy.linalg.eig(krylov_basis['hessian'])
-                    #U,singular_values,V = numpy.linalg.svd(krylov_basis['hessian'])
-                    #numpy.clip(singular_values, numpy.max(singular_values) * self.krylov_eigenvalue_floor_const, float("Inf"), out=singular_values)
-                    #projection_matrix = numpy.dot(U, numpy.diag(1. / numpy.sqrt(singular_values)))
-                    #krylov_basis_copy = {}
-                    #for idx in range(self.krylov_num_directions+1):
-                    #    krylov_basis_copy[idx] = krylov_basis[0] * projection_matrix[0][idx]
+                    U,singular_values,V = numpy.linalg.svd(krylov_basis['hessian'])
+                    numpy.clip(singular_values, numpy.max(singular_values) * self.krylov_eigenvalue_floor_const, float("Inf"), out=singular_values)
+                    projection_matrix = numpy.dot(U, numpy.diag(1. / numpy.sqrt(singular_values)))
+                    krylov_basis_copy = {}
+                    for idx in range(self.krylov_num_directions+1):
+                        krylov_basis_copy[idx] = krylov_basis[0] * projection_matrix[0][idx]
                         
-                    #for krylov_idx in range(0,self.krylov_num_directions+1):
-                    #    for projection_idx in range(1,self.krylov_num_directions+1):
-                    #        krylov_basis_copy[krylov_idx] += krylov_basis[projection_idx] * projection_matrix[projection_idx][krylov_idx]
-                    #del krylov_basis
-                    #krylov_basis = krylov_basis_copy
-                    numpy.clip(eigenvalues, numpy.max(eigenvalues) * self.krylov_eigenvalue_floor_const, float("Inf"), out=eigenvalues)
-                    inv_hessian_cond = numpy.dot(numpy.dot(eigenvectors, numpy.diag(1./eigenvalues)),numpy.transpose(eigenvectors))
-                    inv_chol_factor = sl.cholesky(inv_hessian_cond) #numpy version gives lower triangular, scipy gives ut
-                    for basis_num in range(self.krylov_num_directions+1):
-                        krylov_basis[basis_num] *= inv_chol_factor[basis_num][basis_num]
-                        for basis_mix_idx in range(basis_num+1,self.krylov_num_directions+1):
-                            krylov_basis[basis_num] += krylov_basis[basis_mix_idx] * inv_chol_factor[basis_num][basis_mix_idx]
+                    for krylov_idx in range(0,self.krylov_num_directions+1):
+                        for projection_idx in range(1,self.krylov_num_directions+1):
+                            krylov_basis_copy[krylov_idx] += krylov_basis[projection_idx] * projection_matrix[projection_idx][krylov_idx]
+                    del krylov_basis
+                    krylov_basis = krylov_basis_copy
+                    #eigenvalues, eigenvectors = numpy.linalg.eig(krylov_basis['hessian'])
+                    #eigenvalues = numpy.abs(eigenvalues)
+                    #numpy.clip(eigenvalues, numpy.max(eigenvalues) * self.krylov_eigenvalue_floor_const, float("Inf"), out=eigenvalues)
+                    #inv_hessian_cond = numpy.dot(numpy.dot(eigenvectors, numpy.diag(1./eigenvalues)),numpy.transpose(eigenvectors))
+                    #inv_chol_factor = sl.cholesky(inv_hessian_cond) #numpy version gives lower triangular, scipy gives ut
+                    #for basis_num in range(self.krylov_num_directions+1):
+                    #    krylov_basis[basis_num] *= inv_chol_factor[basis_num][basis_num]
+                    #    for basis_mix_idx in range(basis_num+1,self.krylov_num_directions+1):
+                    #        krylov_basis[basis_num] += krylov_basis[basis_mix_idx] * inv_chol_factor[basis_num][basis_mix_idx]
                 #some_grad = numpy.zeros(len(krylov_basis.keys())-1) #-1 for 'hessian' key
                 #print some_grad
                 #print some_grad.shape[0]
@@ -1318,6 +1373,9 @@ class NN_Trainer(Neural_Network):
                 bfgs_batch_labels = self.labels[bfgs_index]
                 sys.stdout.write("\r                                                                \r")
                 sys.stdout.write("part 3/3: calculating mix of krylov basis using bfgs"), sys.stdout.flush()
+                #step_size = sopt.fmin_bfgs(f=self.calculate_subspace_cross_entropy, x0=numpy.zeros(self.krylov_num_directions+1), 
+                #                           fprime=self.calculate_subspace_gradient, args=(krylov_basis, bfgs_batch_inputs, bfgs_batch_labels, self.model), 
+                #                           gtol=1E-5, norm=2, maxiter=self.krylov_num_bfgs_epochs)
                 step_size = self.bfgs(bfgs_batch_inputs, bfgs_batch_labels, krylov_basis, self.krylov_num_bfgs_epochs)
                 #print "returned step size is", step_size
                 direction = krylov_basis[0] * step_size[0]
@@ -1419,36 +1477,7 @@ class NN_Trainer(Neural_Network):
         #    print "hidden_deriv mean is", numpy.mean(hidden_deriv[layer_num])
         #    print "hidden_deriv var is", numpy.var(hidden_deriv[layer_num])
         if second_order_type == 'gauss-newton':
-            # (diag(p) - p*p') * d = p .* d - p * p'd, where p = hiddens[model.num_layers] and d = hidden_deriv[model.num_layers]
-            #ref_mat = numpy.zeros(hiddens[model.num_layers].shape)
-            #for batch in range(hiddens[model.num_layers].shape[0]):
-            #    second_order_mat = numpy.diag(hiddens[model.num_layers][batch]) - numpy.outer(hiddens[model.num_layers][batch], hiddens[model.num_layers][batch])
-            #print second_order_mat.shape
-            #print hidden_deriv[model.num_layers].shape
-            #    ref_mat[batch] = numpy.dot(hidden_deriv[model.num_layers][batch], second_order_mat) 
-            #U,s,V = numpy.linalg.svd(second_order_mat)
-            #print s
-            gauss_vec = hidden_deriv[model.num_layers] * hiddens[model.num_layers] #p .* d nbatch x ndim
-            #print gauss_vec.shape
-            #print gauss_vec
-            #print type(gauss_vec)
-            #print numpy.sum(gauss_vec, axis=1)
-            #print numpy.sum(gauss_vec, axis=1).shape
-            #output = numpy.zeros(hiddens[model.num_layers].shape[0])
-            #for idx in range(hiddens[model.num_layers].shape[0]):
-            #    output[idx] = numpy.dot(hiddens[model.num_layers][idx], hidden_deriv[model.num_layers][idx])
-            #print output
-            #print output.shape
-            #outish = hiddens[model.num_layers] * numpy.sum(gauss_vec, axis=1)[:,numpy.newaxis]
-            #print outish.shape
-            
-            gauss_vec -= hiddens[model.num_layers] * numpy.sum(gauss_vec, axis=1)[:,numpy.newaxis] #numpy.transpose(numpy.tile(numpy.sum(gauss_vec, axis=1), (hidden_deriv[model.num_layers].shape[1],1)))
-            #print gauss_vec - ref_mat
-            #gauss_vec = ref_mat #* hiddens[model.num_layers] * (1 - hiddens[model.num_layers])
-            #gauss_vec *= hiddens[model.num_layers] * (1 - hiddens[model.num_layers]) #uncomment this to get 52653 after 15 epochs
-            #print gauss_vec.shape
-            #print "entering backward_pass"
-            return self.backward_pass(gauss_vec, hiddens, model)
+            return self.backward_pass(hidden_deriv[model.num_layers], hiddens, model)
         elif second_order_type == 'hessian':
             print "hessian not yet implemented. Exiting now..."
             sys.exit()
@@ -1466,7 +1495,7 @@ class NN_Trainer(Neural_Network):
         cross_entropy = 0.0
         num_correct = 0
         num_examples = features.shape[0]
-        while end_index < self.num_training_examples: #run through the batches
+        while end_index < num_examples: #run through the batches
             end_index = min(batch_index+classification_batch_size, num_examples)
             output = self.forward_pass(features[batch_index:end_index], verbose=False, model=model)
             cross_entropy += self.calculate_cross_entropy(output, labels[batch_index:end_index])
@@ -1478,6 +1507,9 @@ class NN_Trainer(Neural_Network):
         
         return [cross_entropy, num_correct, num_examples]
     def pearlmutter_forward_pass(self, labels, hiddens, model, direction): #need to test
+        # let f be a function from inputs to outputs
+        # consider the weights to be a vector w of parameters to be optimized, (and direction d to be the same)
+        # pearlmutter_forward_pass calculates d' \jacobian_w f
         #hiddens[0] are the inputs
         hidden_deriv = {}
         hidden_deriv[1] = self.weight_matrix_multiply(hiddens[0], direction.weights['01'], direction.bias['1']) * hiddens[1] * (1-hiddens[1])
@@ -1486,109 +1518,147 @@ class NN_Trainer(Neural_Network):
             bias_cur_layer = str(layer_num+1)
             hidden_deriv[layer_num+1] = ((self.weight_matrix_multiply(hiddens[layer_num], direction.weights[weight_cur_layer], 
                                                                       direction.bias[bias_cur_layer]) +
-                                          self.weight_matrix_multiply(hidden_deriv[layer_num], model.weights[weight_cur_layer], 
-                                                                      model.bias[bias_cur_layer])) *
+                                          numpy.dot(hidden_deriv[layer_num], model.weights[weight_cur_layer])) *
                                           hiddens[layer_num+1] * (1-hiddens[layer_num+1]) )
         #update last layer, assuming logistic regression
         
         weight_cur_layer = ''.join([str(model.num_layers-1), str(model.num_layers)])
         bias_cur_layer = str(model.num_layers)
-        #hidden_deriv[model.num_layers] = hiddens[model.num_layers]
-        #for index in range(labels.size):
-        #    hidden_deriv[model.num_layers][index, labels[index]] -= 1
-        hidden_deriv[model.num_layers] = (self.weight_matrix_multiply(hiddens[model.num_layers-1], direction.weights[weight_cur_layer], 
-                                                                       direction.bias[bias_cur_layer]) +
-                                           self.weight_matrix_multiply(hidden_deriv[model.num_layers-1], model.weights[weight_cur_layer], 
-                                                                       model.bias[bias_cur_layer]))
+        linear_layer = (self.weight_matrix_multiply(hiddens[model.num_layers-1], direction.weights[weight_cur_layer], 
+                                                    direction.bias[bias_cur_layer]) +
+                        numpy.dot(hidden_deriv[model.num_layers-1], model.weights[weight_cur_layer]))
+        hidden_deriv[model.num_layers] = linear_layer * hiddens[model.num_layers] - hiddens[model.num_layers] * numpy.sum(linear_layer * hiddens[model.num_layers], axis=1)[:,numpy.newaxis]
+        #compare with finite differences approximation
+        #epsilon = 1E-10
+        #linear_forward = self.forward_pass(hiddens[0], verbose=False, model = model + direction * epsilon)
+        #linear_backward = self.forward_pass(hiddens[0], verbose=False, model = model - direction * epsilon)
+        #print "pearlmutter calc"
+        #print hidden_deriv[model.num_layers][1]
+        #print "finite differences approximation, epsilon", epsilon
+        #print ((linear_forward - linear_backward) / (2 * epsilon))[1]
+        #sys.exit()
+        #epsilon = 1E-5
+        #linear_forward = self.forward_pass(hiddens[0], verbose=False, model = model + direction * epsilon)
+        #linear_backward = self.forward_pass(hiddens[0], verbose=False, model = model - direction * epsilon)
+        #print "finite differences approximation, epsilon", epsilon
+        #print ((linear_forward - linear_backward) / (2 * epsilon))[1]
+        #sys.exit()
+        #hidden_deriv[model.num_layers] = ((linear_forward - linear_backward) / (2 * epsilon))
         return hidden_deriv
-    def bfgs(self, batch_inputs, batch_labels, basis, num_epochs, model = None): #need to test
+    def calculate_subspace_cross_entropy(self, parameters, basis, inputs, labels, model = None):
+        #helper function for scipy bfgs
+        if model == None:
+            model = self.model
+        num_directions = len(parameters)
+        
+        model_update = basis[0] * parameters[0]
+        for dim in range(1, num_directions):
+            model_update += basis[dim] * parameters[dim]
+        
+        return self.calculate_cross_entropy(self.forward_pass(inputs, verbose = False, model = model + model_update), labels)
+    def calculate_subspace_gradient(self, parameters, basis, inputs, labels, model = None):
+        #helper function for scipy bfgs
+        if model == None:
+            model = self.model
+        excluded_keys = {'bias': ['0'], 'weights': []}
+        subspace_gradient = numpy.zeros(parameters.shape)
+        num_directions = len(parameters)
+        batch_size = inputs.shape[0]
+        
+        model_update = basis[0] * parameters[0]
+        for dim in range(1, num_directions):
+            model_update += basis[dim] * parameters[dim]
+            
+        model_gradient = self.calculate_gradient(inputs, labels, model = model + model_update) / batch_size
+        
+        for dim in range(num_directions):
+            subspace_gradient[dim] = model_gradient.dot(basis[dim], excluded_keys)
+        return subspace_gradient
+    def bfgs(self, batch_inputs, batch_labels, basis, num_epochs, model = None, verbose = False): #compared with scipy implementation, looks great, need to add gradient termination condition
         #helper function for Krylov subspace methods
         #given a basis of n directions B, bfgs attempts
         #to find the optimal step size a (which is an element of R^n)
         #such that w_0 + B*a gives the lowest error
         if model == None:
             model = self.model
+        if verbose:
+            print "calculating classification statistics before BFGS step"
+            classification_stats = self.calculate_classification_statistics(batch_inputs, batch_labels, model = model)
+            print "cross-entropy before BFGS is", classification_stats[0]
+            print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
         
-        excluded_keys = {'bias': ['0'], 'weights': []}
+        num_directions = self.krylov_num_directions + 1
+        identity_mat = numpy.identity(num_directions)
             
-        cur_step = numpy.zeros(self.krylov_num_directions + 1)
-        cur_gradient = copy.deepcopy(cur_step)
-        prev_gradient = copy.deepcopy(cur_step)
+        cur_step = numpy.zeros(num_directions)
+        subspace_prev_gradient = numpy.zeros(num_directions)
         #finite_diff_approx = copy.deepcopy(cur_step)
-        bfgs_mat = numpy.identity(self.krylov_num_directions + 1)
-        identity_mat = numpy.identity(self.krylov_num_directions + 1)
-        batch_size = batch_inputs.shape[0]
-        gradient = self.calculate_gradient(batch_inputs, batch_labels, model) / batch_size
+        bfgs_mat = numpy.identity(num_directions)
+        
         init_step_size = 1.0
-        for dim in range(self.krylov_num_directions+1):
-            cur_gradient[dim] = gradient.dot(basis[dim], excluded_keys)
+        subspace_cur_gradient = self.calculate_subspace_gradient(numpy.zeros(num_directions), basis, batch_inputs, batch_labels, model)
+        #for dim in range(num_directions):
+        #    subspace_cur_gradient[dim] = model_gradient.dot(basis[dim], excluded_keys)
             #finite_diff_approx[dim] = ((self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=model + basis[dim] * 0.0005), batch_labels) 
             #                            - (self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=model), batch_labels)) )
             #                           / 0.0005 / batch_size)
         #print "cur_gradient is\n", cur_gradient
         #print "finite diff approximation is\n", finite_diff_approx
-        cur_direction = basis[0] * 0.0
+        model_update = Neural_Network_Weight(model.num_layers)
+        model_update.init_zero_weights(model.get_architecture(), last_layer_logistic=True)
         #print finite_diff_approx / cur_gradient
+        
+        
         for epoch in range(num_epochs):
             print "\r                                                                \r", #clear line
             sys.stdout.write("\rbfgs epoch %d of %d\r" % (epoch+1, num_epochs)), sys.stdout.flush()
+            #print "norm of the subspace gradient is", numpy.linalg.norm(subspace_cur_gradient)
             #print "bfgs matrix is"
             #print bfgs_mat
             #print "current gradient is"
             #print cur_gradient
-            provisional_mix = -numpy.dot(bfgs_mat, cur_gradient)
+            subspace_direction = -numpy.dot(bfgs_mat, subspace_cur_gradient)
             #print "provisional mix is", provisional_mix
-            direction = basis[0] * provisional_mix[0]
-            for dim in range(1, self.krylov_num_directions+1):
-                direction += basis[dim] * provisional_mix[dim]
+            model_direction = basis[0] * subspace_direction[0]
+            for dim in range(1, num_directions):
+                model_direction += basis[dim] * subspace_direction[dim]
             #dir_derivative = gradient.dot(direction, excluded_keys)
             #print ", before line search, directional derivative is", dir_derivative
-            step = self.line_search(batch_inputs, batch_labels, direction, max_step_size=1.5, 
+            step = self.line_search(batch_inputs, batch_labels, model_direction, max_step_size=1.5, 
                                     max_line_searches=self.num_line_searches, init_step_size=init_step_size, 
-                                    model = model + cur_direction)
+                                    model = model + model_update)
             if step == 0.0:
                 print "\rline search failed, returning current step\r", #not updating any parameters"
                 return cur_step
             else:
-                #print "step size after line search is", step,
                 prev_step = copy.deepcopy(cur_step)
-                #print "prev step before update is", prev_step
-                cur_step += provisional_mix * step
-                #print "after update"
-                #print "prev step", prev_step
-                #print "cur_step", cur_step
-            
-            #direction = basis[0] * provisional_mix[0]
-            cur_direction = basis[0] * cur_step[0]
+                cur_step += subspace_direction * step
+            model_update = basis[0] * cur_step[0]
             for dim in range(1,self.krylov_num_directions+1):
-                cur_direction += basis[dim] * cur_step[dim]
+                model_update += basis[dim] * cur_step[dim]
             
-            prev_gradient = copy.deepcopy(cur_gradient)
+            subspace_prev_gradient = copy.deepcopy(subspace_cur_gradient)
+            subspace_cur_gradient = self.calculate_subspace_gradient(cur_step, basis, batch_inputs, batch_labels, model)
+            if verbose:
+                print "calculating classification statistics after BFGS step"
+                classification_stats = self.calculate_classification_statistics(batch_inputs, batch_labels, model = model + model_update)
+                print "cross-entropy after BFGS epoch", epoch, "is", classification_stats[0]
+                print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
             
-            gradient = self.calculate_gradient(batch_inputs, batch_labels, model = model + cur_direction) / batch_size
-            for dim in range(self.krylov_num_directions+1):
-                cur_gradient[dim] = gradient.dot(basis[dim], excluded_keys)
             
             step_condition = cur_step - prev_step
-            grad_condition = cur_gradient - prev_gradient
-            #print "step condition is", step_condition
-            #print "grad condition is", grad_condition
-            #print "curvature value is", numpy.dot(step_condition, grad_condition)
-            #if epoch == 0:
-            #    bfgs_mat *= numpy.dot(step_condition,grad_condition) / numpy.dot(grad_condition,grad_condition)
+            grad_condition = subspace_cur_gradient - subspace_prev_gradient
             curvature_condition = numpy.dot(step_condition, grad_condition)
-            #print "denominator is", den
-            bfgs_mat = numpy.dot(bfgs_mat, (identity_mat - numpy.outer(grad_condition, step_condition) / curvature_condition))
-            bfgs_mat = numpy.dot((identity_mat - numpy.outer(step_condition, grad_condition) / curvature_condition), bfgs_mat)
-            bfgs_mat += numpy.outer(step_condition, step_condition) / curvature_condition
+            #print "curvature condition is", curvature_condition
+            bfgs_mat = (numpy.dot((identity_mat - numpy.outer(step_condition, grad_condition) / curvature_condition), 
+                                  numpy.dot(bfgs_mat, (identity_mat - numpy.outer(grad_condition, step_condition) / curvature_condition)))
+                                  + numpy.outer(step_condition, step_condition) / curvature_condition)
             U,s,V = numpy.linalg.svd(bfgs_mat)
             #print "singular values of bfgs matrix are", s
             condition_number = max(s) / min(s)
             if condition_number > 30000.0:
                 print "condition number of bfgs matrix is too high:", condition_number, "so returning current step\r"
                 return cur_step
-            #print "BFGS matrix after update is"
-            #print bfgs_mat
         return cur_step
 if __name__ == '__main__':
     script_name, config_filename = sys.argv

@@ -767,22 +767,23 @@ class NN_Trainer(Neural_Network):
             self.labels = self.read_label_file()
             self.check_labels()
         else:
-            del self.label_file_name
-        
-        #read architecture
-        self.hiddens_structure = self.default_variable_define(config_dictionary, 'hiddens_structure', arg_type='int_comma_string')
-        architecture = [self.features.shape[1]] + self.hiddens_structure
-        
-        if hasattr(self, 'labels'):
-            architecture.append(numpy.max(self.labels)+1) #will have to change later if I have soft weights
+            del self.label_file_name        
+
         #initialize weights
         self.weight_matrix_name = self.default_variable_define(config_dictionary, 'weight_matrix_name', exit_if_no_default=False)
-        
+
         if self.weight_matrix_name != None:
+            print "Since weight_matrix_name is defined, ignoring possible value of hiddens_structure"
             self.model.open_weights(self.weight_matrix_name)
         else: #initialize model
             del self.weight_matrix_name
-            self.initial_weight_max = self.default_variable_define(config_dictionary, 'initial_weight_max', arg_type='float', default_value=0.1)
+	    
+	    self.hiddens_structure = self.default_variable_define(config_dictionary, 'hiddens_structure', arg_type='int_comma_string', exit_if_no_default=True)
+	    architecture = [self.features.shape[1]] + self.hiddens_structure
+	    if hasattr(self, 'labels'):		    
+               architecture.append(numpy.max(self.labels)+1) #will have to change later if I have soft weights
+            
+	    self.initial_weight_max = self.default_variable_define(config_dictionary, 'initial_weight_max', arg_type='float', default_value=0.1)
             self.initial_weight_min = self.default_variable_define(config_dictionary, 'initial_weight_min', arg_type='float', default_value=-0.1)
             self.initial_bias_max = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=-2.2)
             self.initial_bias_min = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=-2.4)

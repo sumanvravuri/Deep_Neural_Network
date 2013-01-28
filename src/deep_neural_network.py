@@ -477,7 +477,7 @@ class Neural_Network(object, Vector_Math):
                                'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 'save_each_epoch',
                                'do_pretrain', 'pretrain_method', 'pretrain_iterations', 
                                'pretrain_learning_rate', 'pretrain_batch_size',
-                               'do_backprop', 'backprop_method', 'backprop_batch_size',
+                               'do_backprop', 'backprop_method', 'backprop_batch_size', 'l2_regularization_const',
                                'num_epochs', 'num_line_searches', 'armijo_const', 'wolfe_const',
                                'steepest_learning_rate',
                                'conjugate_max_iterations', 'conjugate_const_type',
@@ -753,6 +753,7 @@ class NN_Trainer(Neural_Network):
         #pretrain_batch_size - batch size for pretraining
         #do_backprop - do backpropagation (set to either 0 or 1, probably should be changed to boolean value)
         #backprop_method - either 'steepest_descent', 'conjugate_gradient', or '2nd_order', latter two not yet implemented
+        #l2_regularization_constant - strength of l2 (weight decay) regularization
         #steepest_learning_rate - learning rate for steepest_descent backprop
         #backprop_batch_size - batch size for backprop
         #output_name - name of weight file to store to.
@@ -832,6 +833,8 @@ class NN_Trainer(Neural_Network):
             self.backprop_method = self.default_variable_define(config_dictionary, 'backprop_method', default_value='steepest_descent', 
                                                                 acceptable_values=['steepest_descent', 'conjugate_gradient', 'krylov_subspace'])
             self.backprop_batch_size = self.default_variable_define(config_dictionary, 'backprop_batch_size', default_value=2048, arg_type='int')
+            self.l2_regularization_const = self.default_variable_define(config_dictionary, 'l2_regularization_const', arg_type='float', default_value=0.0, exit_if_no_default=False)
+            
             if self.backprop_method == 'steepest_descent':
                 self.steepest_learning_rate = self.default_variable_define(config_dictionary, 'steepest_learning_rate', default_value=[0.008, 0.004, 0.002, 0.001], arg_type='float_comma_string')
             else:
@@ -882,6 +885,16 @@ class NN_Trainer(Neural_Network):
                 print self.backprop_method, "is not a valid type of backprop (supported ones are steepest_descent, conjugate_gradient, krylov_subspace, and truncated_newton... Exiting now"
                 sys.exit()
         self.model.write_weights(self.output_name)
+    def calculate_loss(self, inputs, labels, model = None):
+        #differs from calculate_cross_entropy in that it also allows for regularization term
+        if model == None:
+            model = self.model
+        excluded_keys = {'bias':['0'], 'weights':[]}
+        outputs = self.forward_pass(inputs, verbose=False, model = model)
+        if self.l2_regularization_const == 0.0:
+            return self.calculate_cross_entropy(outputs, labels)
+        else:
+            return self.calculate_cross_entropy(outputs, labels) + (self.model.norm(excluded_keys) ** 2) * self.l2_regularization_const
     #pretraining functions
     def backward_layer(self, hiddens, weights, biases, weight_type): #completed, transpose expensive, should be compiled
         if weight_type == 'rbm_gaussian_bernoulli':
@@ -948,13 +961,16 @@ class NN_Trainer(Neural_Network):
             hiddens[layer_num] = self.forward_layer(hiddens[layer_num-1], model.weights[weight_cur_layer], 
                                                     model.bias[bias_cur_layer], model.weight_type[weight_cur_layer] )
         return hiddens    
-    def backprop_steepest_descent(self): #completed, expensive, should be compiled
+    def backprop_steepest_descent(self): #need to test regularization
         print "starting backprop using steepest descent"
         print "Number of layers is", self.model.num_layers
         
-        classification_stats = self.calculate_classification_statistics(self.features, self.labels, self.model)
-        print "cross-entropy before steepest descent is", classification_stats[0]
-        print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
+        cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+        print "cross-entropy before steepest descent is", cross_entropy
+        if self.l2_regularization_const > 0.0:
+            print "regularized loss is", loss
+        print "number correctly classified is", num_correct, "of", num_examples
+
         for epoch_num in range(len(self.steepest_learning_rate)):
             print "At epoch", epoch_num+1, "of", len(self.steepest_learning_rate), "with learning rate", self.steepest_learning_rate[epoch_num]
             batch_index = 0
@@ -982,20 +998,24 @@ class NN_Trainer(Neural_Network):
                     bias_next_layer = str(layer_num+1)
                     weight_vec = numpy.dot(weight_vec, numpy.transpose(self.model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out), do the biases get involved in this calculation???
                     
-                    self.model.weights[weight_next_layer] += self.steepest_learning_rate[epoch_num] / batch_size * weight_update
-                    self.model.bias[bias_next_layer][0] += self.steepest_learning_rate[epoch_num] / batch_size * bias_update
+                    self.model.weights[weight_next_layer] += self.steepest_learning_rate[epoch_num] / batch_size * (weight_update - self.l2_regularization_const * self.model.weights[weight_next_layer])
+                    self.model.bias[bias_next_layer][0] += self.steepest_learning_rate[epoch_num] / batch_size * (bias_update - self.l2_regularization_const * self.model.bias[bias_next_layer][0])
                     bias_update = sum(weight_vec)
                     weight_update = numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
                     
                 #do final weight_update
-                self.model.weights[weight_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * weight_update
-                self.model.bias[bias_cur_layer][0] += self.steepest_learning_rate[epoch_num] / batch_size * bias_update
+                self.model.weights[weight_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * (weight_update - self.l2_regularization_const * self.model.weights[weight_next_layer])
+                self.model.bias[bias_cur_layer][0] += self.steepest_learning_rate[epoch_num] / batch_size * (bias_update - self.l2_regularization_const * self.model.bias[bias_next_layer][0])
 
                 batch_index += self.backprop_batch_size
             sys.stdout.write("\r100.0% done \r"), sys.stdout.flush()
-            classification_stats = self.calculate_classification_statistics(self.features, self.labels, self.model)
-            print "cross-entropy at the end of the epoch is", classification_stats[0]
-            print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
+            
+            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+            print "cross-entropy at the end of the epoch is", cross_entropy
+            if self.l2_regularization_const > 0.0:
+                print "regularized loss is", loss
+            print "number correctly classified is", num_correct, "of", num_examples
+            
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
     def backprop_conjugate_gradient(self): #Running... need preconditioners
@@ -1004,9 +1024,11 @@ class NN_Trainer(Neural_Network):
         print "Starting backprop using conjugate gradient"
         print "Number of layers is", self.model.num_layers
         
-        classification_stats = self.calculate_classification_statistics(self.features, self.labels, self.model)
-        print "cross-entropy before conjugate gradient is", classification_stats[0]
-        print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
+        cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+        print "cross-entropy before conjugate gradient is", cross_entropy
+        if self.l2_regularization_const > 0.0:
+            print "regularized loss is", loss
+        print "number correctly classified is", num_correct, "of", num_examples
         #we have three new gradients now: conjugate_gradient_dir, old_gradient, and new_gradient
         excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
         init_step_num = 0
@@ -1090,9 +1112,13 @@ class NN_Trainer(Neural_Network):
             sys.stdout.write("\r100.0% done \r")
             print "number of failed line search in this epoch is", line_search_failures
             print "number of times conjugate direction was not a descent direction is", num_conj_dir_switches
-            classification_stats = self.calculate_classification_statistics(self.features, self.labels, self.model)
-            print "cross-entropy at the end of the epoch is", classification_stats[0]
-            print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
+            
+            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+            print "cross-entropy at the end of the epoch is", cross_entropy
+            if self.l2_regularization_const > 0.0:
+                print "regularized loss is", loss
+            print "number correctly classified is", num_correct, "of", num_examples
+            
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))       
     def calculate_conjugate_gradient_direction(self, batch_inputs, batch_labels, old_gradient, new_gradient, #needs preconditioners, expensive, should be compiled
@@ -1112,6 +1138,7 @@ class NN_Trainer(Neural_Network):
         
         return -new_gradient + current_conjugate_gradient_direction * cg_const
     def calculate_gradient(self, batch_inputs, batch_labels, check_gradient=False, model=None): #want to make this more general to handle arbitrary loss functions, structures, expensive, should be compiled
+        #need to check regularization
         #calculate gradient with particular Neural Network model. If None is specified, will use current weights (i.e., self.model)
         if model == None:
             model = self.model
@@ -1124,7 +1151,8 @@ class NN_Trainer(Neural_Network):
 
         for index in range(batch_size):
             weight_vec[index, batch_labels[index]] -= 1
-        
+            
+        ### below block checks gradient only if there is a problem ##############
         if check_gradient:
             gradient_weights = self.backward_pass(weight_vec, hiddens, model)
             print "checking gradient..."
@@ -1139,8 +1167,8 @@ class NN_Trainer(Neural_Network):
                 for index in range(direction.bias[key].size):
                     direction.bias[key][0][index] = epsilon
                     #print direction.norm()
-                    forward_cross_entropy = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model + direction), batch_labels)
-                    backward_cross_entropy = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model - direction), batch_labels)
+                    forward_cross_entropy = self.calculate_loss(batch_inputs, batch_labels, model = model + direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model + direction), batch_labels)
+                    backward_cross_entropy = self.calculate_loss(batch_inputs, batch_labels, model = model - direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model - direction), batch_labels)
                     finite_difference_model.bias[key][0][index] = (forward_cross_entropy - backward_cross_entropy) / (2 * epsilon)
                     direction.bias[key][0][index] = 0.0
             for key in direction.weights.keys():
@@ -1148,8 +1176,8 @@ class NN_Trainer(Neural_Network):
                 for index0 in range(direction.weights[key].shape[0]):
                     for index1 in range(direction.weights[key].shape[1]):
                         direction.weights[key][index0][index1] = epsilon
-                        forward_cross_entropy = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model + direction), batch_labels)
-                        backward_cross_entropy = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model - direction), batch_labels)
+                        forward_cross_entropy = self.calculate_loss(batch_inputs, batch_labels, model = model + direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model + direction), batch_labels)
+                        backward_cross_entropy = self.calculate_loss(batch_inputs, batch_labels, model = model - direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model - direction), batch_labels)
                         finite_difference_model.weights[key][index0][index1] = (forward_cross_entropy - backward_cross_entropy) / (2 * epsilon)
                         direction.weights[key][index0][index1] = 0.0
             
@@ -1164,8 +1192,9 @@ class NN_Trainer(Neural_Network):
                 print "finite difference approximation for weights", key
                 print finite_difference_model.weights[key]
             sys.exit()
-            
-        return self.backward_pass(weight_vec, hiddens, model)
+        ##########################################################
+                
+        return self.backward_pass(weight_vec, hiddens, model) / batch_size
     def calculate_fisher_diag_matrix(self, batch_inputs, batch_labels, check_gradient = False, model=None): #compared with finite differences, seems kosher
         if model == None:
             model = self.model
@@ -1193,6 +1222,8 @@ class NN_Trainer(Neural_Network):
             weight_vec = numpy.dot(weight_vec, numpy.transpose(model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out)
             output_model.bias[bias_cur_layer][0] = sum(weight_vec**2) #this is somewhat ugly
             output_model.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[layer_num-1]**2), weight_vec**2)
+        
+        ##### block for checking gradient only needed if you think that Fisher diagonal matrix has a problem ####################
         if check_gradient:
             print "checking fisher diagonal matrix..."
             finite_difference_model = Neural_Network_Weight(num_layers=model.num_layers)
@@ -1208,8 +1239,8 @@ class NN_Trainer(Neural_Network):
                     direction.bias[key][0][index] = epsilon
                     #print direction.norm()
                     for batch_idx in range(batch_size):
-                        forward_cross_entropy = self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model + direction), batch_labels[batch_idx])
-                        backward_cross_entropy = self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model - direction), batch_labels[batch_idx])
+                        forward_cross_entropy = self.calculate_loss(batch_inputs[batch_idx], batch_labels[batch_idx], model = model + direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model + direction), batch_labels[batch_idx])
+                        backward_cross_entropy = self.calculate_loss(batch_inputs[batch_idx], batch_labels[batch_idx], model = model - direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model - direction), batch_labels[batch_idx])
                         finite_difference_model.bias[key][0][index] += ((forward_cross_entropy - backward_cross_entropy) / (2 * epsilon)) ** 2
                     direction.bias[key][0][index] = 0.0
             for key in direction.weights.keys():
@@ -1218,8 +1249,8 @@ class NN_Trainer(Neural_Network):
                     for index1 in range(direction.weights[key].shape[1]):
                         direction.weights[key][index0][index1] = epsilon
                         for batch_idx in range(batch_size):
-                            forward_cross_entropy = self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model + direction), batch_labels[batch_idx])
-                            backward_cross_entropy = self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model - direction), batch_labels[batch_idx])
+                            forward_cross_entropy = self.calculate_loss(batch_inputs[batch_idx], batch_labels[batch_idx], model = model + direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model + direction), batch_labels[batch_idx])
+                            backward_cross_entropy = self.calculate_loss(batch_inputs[batch_idx], batch_labels[batch_idx], model = model - direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model - direction), batch_labels[batch_idx])
                             finite_difference_model.weights[key][index0][index1] += ((forward_cross_entropy - backward_cross_entropy) / (2 * epsilon)) ** 2
                         direction.weights[key][index0][index1] = 0.0
             
@@ -1235,7 +1266,10 @@ class NN_Trainer(Neural_Network):
                 print "finite difference approximation for weights", weight_cur_layer
                 print finite_difference_model.weights[weight_cur_layer]
             sys.exit()
-        return output_model
+            ###########################################################################################
+        if self.l2_regularization_const > 0.0:
+            return output_model / batch_size + model * self.l2_regularization_const
+        return output_model / batch_size
     def backward_pass(self, backward_inputs, hiddens, model=None): #need to test
         if model == None:
             model = self.model
@@ -1290,7 +1324,7 @@ class NN_Trainer(Neural_Network):
             print "while the wolfe constant is", self.wolfe_const, "... Exiting now"
             sys.exit()
         excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
-        zero_step_loss = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=model), batch_labels) #\phi_0
+        zero_step_loss = self.calculate_loss(batch_inputs, batch_labels, model) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=model), batch_labels) #\phi_0
         zero_step_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels, False, model), excluded_keys)
         if init_step_size == 0.0:
             step_size = max_step_size / 2
@@ -1303,8 +1337,8 @@ class NN_Trainer(Neural_Network):
         
         for num_line_searches in range(1,max_line_searches+1): #looking for brackets
             try:
-                proposed_loss = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False,
-                                                                               model = model + direction * step_size), batch_labels)
+                proposed_loss = self.calculate_loss(batch_inputs, batch_labels, model = model + direction * step_size) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False,
+                                                                                                                        #model = model + direction * step_size), batch_labels)
             except FloatingPointError:
                 print "encountered floating point error (likely under/overflow during forward pass), so decreasing step size by 1/2"
                 step_size /= 2
@@ -1352,8 +1386,7 @@ class NN_Trainer(Neural_Network):
             #print "upper bracket:", upper_bracket, "lower bracket:", lower_bracket
             step_size = self.interpolate_step_size((upper_bracket, upper_bracket_loss, upper_bracket_deriv),
                                                         (lower_bracket, lower_bracket_loss, lower_bracket_deriv))
-            proposed_loss = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False,
-                                                                           model = model + direction * step_size), batch_labels)
+            proposed_loss = self.calculate_loss(batch_inputs, batch_labels, model = model + direction * step_size) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False,model = model + direction * step_size), batch_labels)
             proposed_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels, model = model + direction * step_size), excluded_keys)
             if proposed_loss > zero_step_loss + self.armijo_const * step_size * zero_step_directional_derivative or proposed_loss >= lower_bracket_loss:
                 #print "Armijo rule failed, adjusting brackets"
@@ -1395,9 +1428,11 @@ class NN_Trainer(Neural_Network):
         print "Starting backprop using krylov subspace descent"
         print "Number of layers is", self.model.num_layers
         
-        classification_stats = self.calculate_classification_statistics(self.features, self.labels, self.model)
-        print "cross-entropy before krylov subspace descent is", classification_stats[0]
-        print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
+        cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+        print "cross-entropy before krylov subspace is", cross_entropy
+        if self.l2_regularization_const > 0.0:
+            print "regularized loss is", loss
+        print "number correctly classified is", num_correct, "of", num_examples
         
         prev_direction = Neural_Network_Weight(self.model.num_layers) #copy.deepcopy(self.model) * 0
         #print self.model.get_architecture()
@@ -1426,7 +1461,7 @@ class NN_Trainer(Neural_Network):
                 #print "krylov_start_index:", krylov_start_index, "bfgs_start_index:", bfgs_start_index, "bfgs_end_index", bfgs_end_index
                 sys.stdout.write("\r                                                                \r") #clear line
                 sys.stdout.write("part 1/3: calculating gradient"), sys.stdout.flush()
-                average_gradient = self.calculate_gradient(batch_inputs, batch_labels, False, self.model) / batch_size
+                average_gradient = self.calculate_gradient(batch_inputs, batch_labels, False, self.model)
                 
                 #average_gradient.print_statistics()
                 #need to fix the what indices the batches are taken from... will always be the same subset
@@ -1437,7 +1472,7 @@ class NN_Trainer(Neural_Network):
                     sys.stdout.write("part 1/3: calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
                     weightcost = 2E-5
                     alpha = 1E-5
-                    preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model) / batch_size
+                    preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model)
                     # add regularization
                     #preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
                     preconditioner = (preconditioner + weightcost) ** (3./4.)
@@ -1500,9 +1535,12 @@ class NN_Trainer(Neural_Network):
                 direction.clear()
             #sub_batch_start_perc = (sub_batch_start_perc + 1.0 / self.krylov_num_batch_splits) % 1 #not sure if this is better, below line is what I used to get krylov results
             sub_batch_start_perc = (sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) % 1
-            targets = self.forward_pass(inputs=self.features, verbose=False, model = self.model)
-            print "cross-entropy at the end of the epoch is", self.calculate_cross_entropy(targets,self.labels)
-            print "number correctly classified is", int(self.calculate_classification_accuracy(targets, self.labels) * self.num_training_examples), "of", self.num_training_examples
+            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+            print "cross-entropy at the end of the epoch is", cross_entropy
+            if self.l2_regularization_const > 0.0:
+                print "regularized loss is", loss
+            print "number correctly classified is", num_correct, "of", num_examples
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)])) 
     def calculate_krylov_basis(self, batch_inputs, batch_labels, prev_direction, gradient = None, model = None, preconditioner = None): #need to test
@@ -1514,7 +1552,7 @@ class NN_Trainer(Neural_Network):
         krylov_basis['hessian'] = numpy.identity(self.krylov_num_directions+1)
         #will need to add preconditioning at some point
         if gradient == None:
-            krylov_basis[0] = self.calculate_gradient(batch_inputs, batch_labels, False, model) / batch_size #normed gradient for first direction
+            krylov_basis[0] = self.calculate_gradient(batch_inputs, batch_labels, False, model) #normed gradient for first direction
         else:
             krylov_basis[0] = gradient
         
@@ -1529,7 +1567,7 @@ class NN_Trainer(Neural_Network):
             #if basis_num < self.krylov_num_directions:
             second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, 
                                                                            direction = krylov_basis[basis_num-1], model = model, 
-                                                                           second_order_type = self.second_order_matrix) / batch_size
+                                                                           second_order_type = self.second_order_matrix)
                 #print "printing second_order_direction statistics"
                 #second_order_direction.print_statistics()
                 #will have to add preconditioning here
@@ -1552,7 +1590,7 @@ class NN_Trainer(Neural_Network):
         if self.krylov_use_hessian_preconditioner:
             second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, 
                                                                            direction = second_order_direction, model = model, 
-                                                                           second_order_type = self.second_order_matrix) / batch_size
+                                                                           second_order_type = self.second_order_matrix)
             for hessian_idx in range(self.krylov_num_directions+1):
                 krylov_basis['hessian'][hessian_idx,self.krylov_num_directions] = second_order_direction.dot(krylov_basis[hessian_idx], excluded_keys)
                 krylov_basis['hessian'][self.krylov_num_directions,hessian_idx] = krylov_basis['hessian'][hessian_idx,self.krylov_num_directions]
@@ -1566,6 +1604,7 @@ class NN_Trainer(Neural_Network):
             direction = self.calculate_gradient(inputs, labels, False, model)
         if second_order_type == None:
             second_order_type='gauss-newton' #other option is 'hessian'
+        batch_size = inputs.shape[0]
         #print "printing model statistics"
         #model.print_statistics()
         #print "printing direction statistics"
@@ -1587,14 +1626,19 @@ class NN_Trainer(Neural_Network):
         #    print "hidden_deriv mean is", numpy.mean(hidden_deriv[layer_num])
         #    print "hidden_deriv var is", numpy.var(hidden_deriv[layer_num])
         if second_order_type == 'gauss-newton':
-            return self.backward_pass(hidden_deriv[model.num_layers], hiddens, model)
+            if self.l2_regularization_const > 0.0:
+                return self.backward_pass(hidden_deriv[model.num_layers], hiddens, model) / batch_size + direction * self.l2_regularization_const
+            return self.backward_pass(hidden_deriv[model.num_layers], hiddens, model) / batch_size
         elif second_order_type == 'hessian':
             print "hessian not yet implemented. Exiting now..."
             sys.exit()
+    
     def calculate_classification_statistics(self, features, labels, model=None):
         if model == None:
             model = self.model
-            
+        
+        excluded_keys = {'bias': ['0'], 'weights': []}
+        
         if self.do_backprop == False:
             classification_batch_size = 4096
         else:
@@ -1615,7 +1659,9 @@ class NN_Trainer(Neural_Network):
             num_correct += numpy.sum(prediction == labels[batch_index:end_index])
             batch_index += classification_batch_size
         
-        return [cross_entropy, num_correct, num_examples]
+        if self.l2_regularization_const > 0.0:
+            loss = cross_entropy + (model.norm(excluded_keys) ** 2) * self.l2_regularization_const
+        return cross_entropy, num_correct, num_examples, loss
     def pearlmutter_forward_pass(self, labels, hiddens, model, direction, check_gradient=False): #need to test
         # let f be a function from inputs to outputs
         # consider the weights to be a vector w of parameters to be optimized, (and direction d to be the same)
@@ -1660,7 +1706,7 @@ class NN_Trainer(Neural_Network):
         for dim in range(1, num_directions):
             model_update += basis[dim] * parameters[dim]
         
-        return self.calculate_cross_entropy(self.forward_pass(inputs, verbose = False, model = model + model_update), labels)
+        return self.calculate_loss(inputs, labels, model = model + model_update) #self.calculate_cross_entropy(self.forward_pass(inputs, verbose = False, model = model + model_update), labels)
     def calculate_subspace_gradient(self, parameters, basis, inputs, labels, model = None):
         #helper function for scipy bfgs
         if model == None:
@@ -1674,7 +1720,7 @@ class NN_Trainer(Neural_Network):
         for dim in range(1, num_directions):
             model_update += basis[dim] * parameters[dim]
             
-        model_gradient = self.calculate_gradient(inputs, labels, False, model = model + model_update) / batch_size
+        model_gradient = self.calculate_gradient(inputs, labels, False, model = model + model_update)
         
         for dim in range(num_directions):
             subspace_gradient[dim] = model_gradient.dot(basis[dim], excluded_keys)
@@ -1769,9 +1815,11 @@ class NN_Trainer(Neural_Network):
         print "Starting backprop using truncated newton"
         print "Number of layers is", self.model.num_layers
         
-        classification_stats = self.calculate_classification_statistics(self.features, self.labels, self.model)
-        print "cross-entropy before truncated newton is", classification_stats[0]
-        print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
+        cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+        print "cross-entropy before truncated newton is", cross_entropy
+        if self.l2_regularization_const > 0.0:
+            print "regularized loss is", loss
+        print "number correctly classified is", num_correct, "of", num_examples
         
         excluded_keys = {'bias':['0'], 'weights':[]} 
         damping_factor = self.truncated_newton_init_damping_factor
@@ -1784,26 +1832,27 @@ class NN_Trainer(Neural_Network):
             
             while end_index < self.num_training_examples: #run through the batches
                 per_done = float(batch_index)/self.num_training_examples*100
-                print "\r                                                                                                         \r", #clear line
+                sys.stdout.write("\r                                                                \r") #clear line
                 sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
-                print "damping factor is", damping_factor
+                sys.stdout.write("\r                                                                \r") #clear line
+                sys.stdout.write("\rdamping factor is %.1f\r" % damping_factor), sys.stdout.flush()
                 end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
                 batch_inputs = self.features[batch_index:end_index]
                 batch_labels = self.labels[batch_index:end_index]
                 batch_size = batch_inputs.shape[0]
                 
-                print "\r                                                                \r", #clear line
+                sys.stdout.write("\r                                                                \r") #clear line
                 sys.stdout.write("\rcalculating gradient\r"), sys.stdout.flush()
-                gradient = self.calculate_gradient(batch_inputs, batch_labels, check_gradient=False, model=self.model) / batch_size
+                gradient = self.calculate_gradient(batch_inputs, batch_labels, check_gradient=False, model=self.model)
                 
-                old_cross_entropy = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
+                old_cross_entropy = self.calculate_loss(batch_inputs, batch_labels, model=self.model) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
                 
                 if self.use_fisher_preconditioner:
                     sys.stdout.write("\r                                                                \r")
                     sys.stdout.write("part 1/3: calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
                     weightcost = 2E-5
                     #alpha = 1E-5
-                    preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model) / batch_size
+                    preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model)
                     # add regularization
                     #preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
                     preconditioner = (preconditioner + weightcost) ** (3./4.)
@@ -1811,23 +1860,25 @@ class NN_Trainer(Neural_Network):
                 model_update, model_vals = self.conjugate_gradient(batch_inputs, batch_labels, self.truncated_newton_num_cg_epochs, model=self.model, 
                                                                    damping_factor=damping_factor, preconditioner=preconditioner, gradient=gradient, 
                                                                    second_order_type=self.second_order_matrix, init_search_direction=model_update,
-                                                                   verbose = True)
+                                                                   verbose = False)
                 model_den = model_vals[-1] #- model_vals[0]
                 
                 self.model += model_update
-                new_cross_entropy = self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
+                new_cross_entropy = self.calculate_loss(batch_inputs, batch_labels, model=self.model)  #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
                 model_num = (new_cross_entropy - old_cross_entropy) / batch_size
-                
-                print "model ratio is", model_num / model_den
+                print "\r                                                                                                         \r",
+                print "model ratio is", model_num / model_den,
                 if model_num / model_den < 0.25:
                     damping_factor *= 1.5
                 elif model_num / model_den > 0.75:
                     damping_factor *= 2./3.
                 batch_index += self.backprop_batch_size
             sys.stdout.write("\r100.0% done \r")
-            classification_stats = self.calculate_classification_statistics(self.features, self.labels, self.model)
-            print "cross-entropy at the end of the epoch is", classification_stats[0]
-            print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
+            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+            print "cross-entropy at the end of the epoch is", cross_entropy
+            if self.l2_regularization_const > 0.0:
+                print "regularized loss is", loss
+            print "number correctly classified is", num_correct, "of", num_examples
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
                  
@@ -1853,20 +1904,21 @@ class NN_Trainer(Neural_Network):
         
         batch_size = batch_inputs.shape[0]
         if gradient == None:
-            gradient = self.calculate_gradient(batch_inputs, batch_labels, False, model = model) / batch_size
+            gradient = self.calculate_gradient(batch_inputs, batch_labels, False, model = model)
         
         if init_search_direction == None:
             model_vals.append(0)
             residual = gradient 
         else:
             second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, init_search_direction, 
-                                                                           model, second_order_type=second_order_type) / batch_size
+                                                                           model, second_order_type=second_order_type)
             residual = gradient + second_order_direction
             model_val = 0.5 * init_search_direction.dot(gradient + residual, excluded_keys)
             model_vals.append(model_val) 
             model_update += init_search_direction    
             
-        print "model val at end of epoch is", model_vals[-1]
+        if verbose:
+            print "model val at end of epoch is", model_vals[-1]
         
         if preconditioner != None:
             preconditioned_residual = residual / preconditioner
@@ -1879,9 +1931,9 @@ class NN_Trainer(Neural_Network):
             sys.stdout.write("\rconjugate gradient epoch %d of %d\r" % (epoch+1, num_epochs)), sys.stdout.flush()
             
             if damping_factor > 0.0:
-                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, search_direction, model, second_order_type='gauss-newton') / batch_size + search_direction * damping_factor
+                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, search_direction, model, second_order_type='gauss-newton') + search_direction * damping_factor
             else:
-                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, search_direction, model, second_order_type='gauss-newton') / batch_size
+                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, search_direction, model, second_order_type='gauss-newton')
                                                                             
             curvature = search_direction.dot(second_order_direction,excluded_keys)
             if curvature <= 0:
@@ -1899,11 +1951,14 @@ class NN_Trainer(Neural_Network):
             residual += second_order_direction * step_size
             model_val = 0.5 * model_update.dot(gradient + residual, excluded_keys)
             model_vals.append(model_val)
-            print "model val at end of epoch is", model_vals[-1]
+            if verbose:
+                print "model val at end of epoch is", model_vals[-1]
             test_gap = int(numpy.max([numpy.ceil(epoch * gap_ratio), min_gap]))
             if epoch > test_gap: #checking termination condition
                 previous_model_val = model_vals[-test_gap]
                 if (previous_model_val - model_val) / model_val <= tolerance * test_gap and previous_model_val < 0:
+                    print "\r                                                                \r", #clear line
+                    sys.stdout.write("\rtermination condition satisfied for conjugate gradient, returning step\r"), sys.stdout.flush()
                     break
             if preconditioner != None:
                 preconditioned_residual = residual / preconditioner

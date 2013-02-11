@@ -187,7 +187,8 @@ class Neural_Network_Weight(object):
         del weight_dict
         self.check_weights()
     def init_random_weights(self, architecture, initial_bias_max, initial_bias_min, initial_weight_min, 
-                           initial_weight_max, last_layer_logistic=True): #completed, expensive, should be compiled
+                           initial_weight_max, last_layer_logistic=True, seed=0): #completed, expensive, should be compiled
+        numpy.random.seed(seed)
         self.num_layers = len(architecture) - 1
         initial_bias_range = initial_bias_max - initial_bias_min
         initial_weight_range = initial_weight_max - initial_weight_min
@@ -885,16 +886,21 @@ class NN_Trainer(Neural_Network):
                 print self.backprop_method, "is not a valid type of backprop (supported ones are steepest_descent, conjugate_gradient, krylov_subspace, and truncated_newton... Exiting now"
                 sys.exit()
         self.model.write_weights(self.output_name)
-    def calculate_loss(self, inputs, labels, model = None):
+    def calculate_loss(self, inputs, labels, model = None, l2_regularization_const = None):
         #differs from calculate_cross_entropy in that it also allows for regularization term
+        batch_size = inputs.shape[0]
+        if batch_size == inputs.size:
+            batch_size = 1
         if model == None:
             model = self.model
+        if l2_regularization_const == None:
+            l2_regularization_const = self.l2_regularization_const
         excluded_keys = {'bias':['0'], 'weights':[]}
         outputs = self.forward_pass(inputs, verbose=False, model = model)
         if self.l2_regularization_const == 0.0:
             return self.calculate_cross_entropy(outputs, labels)
         else:
-            return self.calculate_cross_entropy(outputs, labels) + (self.model.norm(excluded_keys) ** 2) * self.l2_regularization_const
+            return self.calculate_cross_entropy(outputs, labels) + (model.norm(excluded_keys) ** 2) * l2_regularization_const / 2. * batch_size#model.dot(model, excluded_keys) * self.l2_regularization_const
     #pretraining functions
     def backward_layer(self, hiddens, weights, biases, weight_type): #completed, transpose expensive, should be compiled
         if weight_type == 'rbm_gaussian_bernoulli':
@@ -1137,11 +1143,14 @@ class NN_Trainer(Neural_Network):
             sys.exit()
         
         return -new_gradient + current_conjugate_gradient_direction * cg_const
-    def calculate_gradient(self, batch_inputs, batch_labels, check_gradient=False, model=None): #want to make this more general to handle arbitrary loss functions, structures, expensive, should be compiled
+    def calculate_gradient(self, batch_inputs, batch_labels, check_gradient=False, model=None, l2_regularization_const = None): #want to make this more general to handle arbitrary loss functions, structures, expensive, should be compiled
         #need to check regularization
         #calculate gradient with particular Neural Network model. If None is specified, will use current weights (i.e., self.model)
+        excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
         if model == None:
             model = self.model
+        if l2_regularization_const == None:
+            l2_regularization_const = self.l2_regularization_const
         #gradient = copy.deepcopy(model)
         batch_size = batch_inputs.shape[0]
         
@@ -1151,10 +1160,18 @@ class NN_Trainer(Neural_Network):
 
         for index in range(batch_size):
             weight_vec[index, batch_labels[index]] -= 1
-            
-        ### below block checks gradient only if there is a problem ##############
-        if check_gradient:
-            gradient_weights = self.backward_pass(weight_vec, hiddens, model)
+        gradient_weights = self.backward_pass(weight_vec, hiddens, model)
+        
+        if not check_gradient:
+            if l2_regularization_const > 0.0:
+                return gradient_weights / batch_size  + model * l2_regularization_const
+            return gradient_weights / batch_size
+        
+        ### below block checks gradient... only to be used if you think the gradient is incorrectly calculated ##############
+        else:
+            if l2_regularization_const > 0.0:
+                gradient_weights += model * (l2_regularization_const * batch_size)
+            sys.stdout.write("\r                                                                \r")
             print "checking gradient..."
             finite_difference_model = Neural_Network_Weight(num_layers=model.num_layers)
             finite_difference_model.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
@@ -1167,18 +1184,18 @@ class NN_Trainer(Neural_Network):
                 for index in range(direction.bias[key].size):
                     direction.bias[key][0][index] = epsilon
                     #print direction.norm()
-                    forward_cross_entropy = self.calculate_loss(batch_inputs, batch_labels, model = model + direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model + direction), batch_labels)
-                    backward_cross_entropy = self.calculate_loss(batch_inputs, batch_labels, model = model - direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model - direction), batch_labels)
-                    finite_difference_model.bias[key][0][index] = (forward_cross_entropy - backward_cross_entropy) / (2 * epsilon)
+                    forward_loss = self.calculate_loss(batch_inputs, batch_labels, model = model + direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model + direction), batch_labels)
+                    backward_loss = self.calculate_loss(batch_inputs, batch_labels, model = model - direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model - direction), batch_labels)
+                    finite_difference_model.bias[key][0][index] = (forward_loss - backward_loss) / (2 * epsilon)
                     direction.bias[key][0][index] = 0.0
             for key in direction.weights.keys():
                 print "at weight key", key
                 for index0 in range(direction.weights[key].shape[0]):
                     for index1 in range(direction.weights[key].shape[1]):
                         direction.weights[key][index0][index1] = epsilon
-                        forward_cross_entropy = self.calculate_loss(batch_inputs, batch_labels, model = model + direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model + direction), batch_labels)
-                        backward_cross_entropy = self.calculate_loss(batch_inputs, batch_labels, model = model - direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model - direction), batch_labels)
-                        finite_difference_model.weights[key][index0][index1] = (forward_cross_entropy - backward_cross_entropy) / (2 * epsilon)
+                        forward_loss = self.calculate_loss(batch_inputs, batch_labels, model = model + direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model + direction), batch_labels)
+                        backward_loss = self.calculate_loss(batch_inputs, batch_labels, model = model - direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model = model - direction), batch_labels)
+                        finite_difference_model.weights[key][index0][index1] = (forward_loss - backward_loss) / (2 * epsilon)
                         direction.weights[key][index0][index1] = 0.0
             
             for key in direction.bias.keys():
@@ -1186,18 +1203,28 @@ class NN_Trainer(Neural_Network):
                 print gradient_weights.bias[key]
                 print "finite difference approximation for bias", key
                 print finite_difference_model.bias[key]
+                print "model for bias", key
+                print model.bias[key]
             for key in direction.weights.keys():
                 print "calculated gradient for weights", key
                 print gradient_weights.weights[key]
                 print "finite difference approximation for weights", key
                 print finite_difference_model.weights[key]
+                print "model for weights", key
+                print model.weights[key]
             sys.exit()
         ##########################################################
-                
-        return self.backward_pass(weight_vec, hiddens, model) / batch_size
-    def calculate_fisher_diag_matrix(self, batch_inputs, batch_labels, check_gradient = False, model=None): #compared with finite differences, seems kosher
+    
+    def calculate_fisher_diag_matrix(self, batch_inputs, batch_labels, check_gradient = False, model=None, l2_regularization_const = None): #compared with finite differences, seems kosher
         if model == None:
             model = self.model
+        if l2_regularization_const == None:
+            l2_regularization_const = self.l2_regularization_const
+        
+        if l2_regularization_const > 0.0:
+            #the calculation is a bit more involved than gradient, will need derivative w.r.t. cross-entropy, and not loss, so use
+            #calculate_gradient(), but set l2_regularization_const = 0.0
+            average_grad_cross_entropy = self.calculate_gradient(batch_inputs, batch_labels, check_gradient=False, model=model, l2_regularization_const = 0.0)
         output_model = Neural_Network_Weight(num_layers=model.num_layers)
         output_model.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
         
@@ -1223,25 +1250,35 @@ class NN_Trainer(Neural_Network):
             output_model.bias[bias_cur_layer][0] = sum(weight_vec**2) #this is somewhat ugly
             output_model.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[layer_num-1]**2), weight_vec**2)
         
+        if not check_gradient:
+            if l2_regularization_const > 0.0:
+                return (output_model / batch_size + (model ** 2) * (l2_regularization_const ** 2) + 
+                        (average_grad_cross_entropy * model) * (2 * l2_regularization_const))
+            return output_model / batch_size
+    
         ##### block for checking gradient only needed if you think that Fisher diagonal matrix has a problem ####################
-        if check_gradient:
+        else:
+            if l2_regularization_const > 0.0:
+                output_model = (output_model + (model ** 2) * ((l2_regularization_const ** 2) * batch_size) + 
+                                (average_grad_cross_entropy * model) * (2 * l2_regularization_const * batch_size))
+                
+            sys.stdout.write("\r                                                                \r")
             print "checking fisher diagonal matrix..."
             finite_difference_model = Neural_Network_Weight(num_layers=model.num_layers)
             finite_difference_model.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
             direction = Neural_Network_Weight(num_layers=model.num_layers)
             direction.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
             
-            epsilon = 1E-6
+            epsilon = 1E-5
             for key in direction.bias.keys():
                 print "at bias key", key
-                print "batchsize is", batch_size
                 for index in range(direction.bias[key].size):
                     direction.bias[key][0][index] = epsilon
                     #print direction.norm()
                     for batch_idx in range(batch_size):
-                        forward_cross_entropy = self.calculate_loss(batch_inputs[batch_idx], batch_labels[batch_idx], model = model + direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model + direction), batch_labels[batch_idx])
-                        backward_cross_entropy = self.calculate_loss(batch_inputs[batch_idx], batch_labels[batch_idx], model = model - direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model - direction), batch_labels[batch_idx])
-                        finite_difference_model.bias[key][0][index] += ((forward_cross_entropy - backward_cross_entropy) / (2 * epsilon)) ** 2
+                        forward_loss = self.calculate_loss(batch_inputs[batch_idx], batch_labels[batch_idx], model = model + direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model + direction), batch_labels[batch_idx])
+                        backward_loss = self.calculate_loss(batch_inputs[batch_idx], batch_labels[batch_idx], model = model - direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model - direction), batch_labels[batch_idx])
+                        finite_difference_model.bias[key][0][index] += ((forward_loss - backward_loss) / (2 * epsilon)) ** 2
                     direction.bias[key][0][index] = 0.0
             for key in direction.weights.keys():
                 print "at weight key", key
@@ -1249,27 +1286,25 @@ class NN_Trainer(Neural_Network):
                     for index1 in range(direction.weights[key].shape[1]):
                         direction.weights[key][index0][index1] = epsilon
                         for batch_idx in range(batch_size):
-                            forward_cross_entropy = self.calculate_loss(batch_inputs[batch_idx], batch_labels[batch_idx], model = model + direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model + direction), batch_labels[batch_idx])
-                            backward_cross_entropy = self.calculate_loss(batch_inputs[batch_idx], batch_labels[batch_idx], model = model - direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model - direction), batch_labels[batch_idx])
-                            finite_difference_model.weights[key][index0][index1] += ((forward_cross_entropy - backward_cross_entropy) / (2 * epsilon)) ** 2
+                            forward_loss = self.calculate_loss(batch_inputs[batch_idx], batch_labels[batch_idx], model = model + direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model + direction), batch_labels[batch_idx])
+                            backward_loss = self.calculate_loss(batch_inputs[batch_idx], batch_labels[batch_idx], model = model - direction) #self.calculate_cross_entropy(self.forward_pass(batch_inputs[batch_idx], verbose=False, model = model - direction), batch_labels[batch_idx])
+                            finite_difference_model.weights[key][index0][index1] += ((forward_loss - backward_loss) / (2 * epsilon)) ** 2
                         direction.weights[key][index0][index1] = 0.0
             
             for layer_num in range(model.num_layers,0,-1):
                 weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
                 bias_cur_layer = str(layer_num)
-                print "calculated gradient for bias", bias_cur_layer
+                print "calculated fisher diagonal for bias", bias_cur_layer
                 print output_model.bias[bias_cur_layer]
                 print "finite difference approximation for bias", bias_cur_layer
                 print finite_difference_model.bias[bias_cur_layer]
-                print "calculated gradient for weights", weight_cur_layer
+                print "calculated fisher diagonal for weights", weight_cur_layer
                 print output_model.weights[weight_cur_layer]
                 print "finite difference approximation for weights", weight_cur_layer
                 print finite_difference_model.weights[weight_cur_layer]
             sys.exit()
             ###########################################################################################
-        if self.l2_regularization_const > 0.0:
-            return output_model / batch_size + model * self.l2_regularization_const
-        return output_model / batch_size
+        
     def backward_pass(self, backward_inputs, hiddens, model=None): #need to test
         if model == None:
             model = self.model
@@ -1659,8 +1694,9 @@ class NN_Trainer(Neural_Network):
             num_correct += numpy.sum(prediction == labels[batch_index:end_index])
             batch_index += classification_batch_size
         
+        loss = cross_entropy
         if self.l2_regularization_const > 0.0:
-            loss = cross_entropy + (model.norm(excluded_keys) ** 2) * self.l2_regularization_const
+            loss += (model.norm(excluded_keys) ** 2) * self.l2_regularization_const
         return cross_entropy, num_correct, num_examples, loss
     def pearlmutter_forward_pass(self, labels, hiddens, model, direction, check_gradient=False): #need to test
         # let f be a function from inputs to outputs
@@ -1845,17 +1881,17 @@ class NN_Trainer(Neural_Network):
                 sys.stdout.write("\rcalculating gradient\r"), sys.stdout.flush()
                 gradient = self.calculate_gradient(batch_inputs, batch_labels, check_gradient=False, model=self.model)
                 
-                old_cross_entropy = self.calculate_loss(batch_inputs, batch_labels, model=self.model) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
+                old_loss = self.calculate_loss(batch_inputs, batch_labels, model=self.model) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
                 
                 if self.use_fisher_preconditioner:
                     sys.stdout.write("\r                                                                \r")
-                    sys.stdout.write("part 1/3: calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
-                    weightcost = 2E-5
+                    sys.stdout.write("calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
+                    
                     #alpha = 1E-5
                     preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model)
                     # add regularization
                     #preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
-                    preconditioner = (preconditioner + weightcost) ** (3./4.)
+                    preconditioner = (preconditioner + self.l2_regularization_const) ** (3./4.)
                 
                 model_update, model_vals = self.conjugate_gradient(batch_inputs, batch_labels, self.truncated_newton_num_cg_epochs, model=self.model, 
                                                                    damping_factor=damping_factor, preconditioner=preconditioner, gradient=gradient, 
@@ -1864,9 +1900,9 @@ class NN_Trainer(Neural_Network):
                 model_den = model_vals[-1] #- model_vals[0]
                 
                 self.model += model_update
-                new_cross_entropy = self.calculate_loss(batch_inputs, batch_labels, model=self.model)  #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
-                model_num = (new_cross_entropy - old_cross_entropy) / batch_size
-                print "\r                                                                                                         \r",
+                new_loss = self.calculate_loss(batch_inputs, batch_labels, model=self.model)  #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
+                model_num = (new_loss - old_loss) / batch_size
+                sys.stdout.write("\r                                                                      \r") #clear line
                 print "model ratio is", model_num / model_den,
                 if model_num / model_den < 0.25:
                     damping_factor *= 1.5

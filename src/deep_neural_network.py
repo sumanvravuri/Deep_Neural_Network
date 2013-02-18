@@ -349,18 +349,24 @@ class Neural_Network_Weight(object):
             nn_output.weights[key] = self.weights[key] + addend
         return nn_output
         
-    def __sub__(self,nn_weight2):
-        if type(nn_weight2) is not Neural_Network_Weight:
-            print "argument must be of type Neural_Network_Weight... instead of type", type(nn_weight2), "Exiting now..."
-            sys.exit()
-        if self.get_architecture() != nn_weight2.get_architecture():
-            print "Neural net models do not match... Exiting now"
-            sys.exit()
-        nn_output = copy.deepcopy(self) #is a shallow copy... should I make it a deep copy
+    def __sub__(self,subtrahend):
+        nn_output = copy.deepcopy(self)
+        if type(subtrahend) is Neural_Network_Weight:
+            if self.get_architecture() != subtrahend.get_architecture():
+                print "Neural net models do not match... Exiting now"
+                sys.exit()
+            
+            for key in self.bias.keys():
+                nn_output.bias[key] = self.bias[key] - subtrahend.bias[key]
+            for key in self.weights.keys():
+                nn_output.weights[key] = self.weights[key] - subtrahend.weights[key]
+            return nn_output
+        #otherwise type is scalar
+        subtrahend = float(subtrahend)
         for key in self.bias.keys():
-            nn_output.bias[key] = self.bias[key] - nn_weight2.bias[key]
+            nn_output.bias[key] = self.bias[key] - subtrahend
         for key in self.weights.keys():
-            nn_output.weights[key] = self.weights[key] - nn_weight2.weights[key]
+            nn_output.weights[key] = self.weights[key] - subtrahend
         return nn_output
     def __mul__(self, multiplier):
         #if type(scalar) is not float and type(scalar) is not int:
@@ -665,12 +671,17 @@ class Neural_Network(object, Vector_Math):
         if model == None:
             model = self.model 
         cur_layer = inputs
-        for layer_num in range(1,model.num_layers+1):
+        for layer_num in range(1,model.num_layers):
             if verbose:
                 print "At layer", layer_num, "of", model.num_layers
             weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
             bias_cur_layer = str(layer_num)
             cur_layer = self.forward_layer(cur_layer, model.weights[weight_cur_layer], 
+                                           model.bias[bias_cur_layer], model.weight_type[weight_cur_layer])
+        
+        weight_cur_layer = ''.join([str(model.num_layers-1),str(model.num_layers)])
+        bias_cur_layer = str(model.num_layers)
+        cur_layer = self.forward_layer(cur_layer, model.weights[weight_cur_layer], 
                                            model.bias[bias_cur_layer], 'linear')
         return cur_layer
     def forward_pass(self, inputs, verbose=True, model=None): #completed
@@ -1199,20 +1210,21 @@ class NN_Trainer(Neural_Network):
                         finite_difference_model.weights[key][index0][index1] = (forward_loss - backward_loss) / (2 * epsilon)
                         direction.weights[key][index0][index1] = 0.0
             
-            for key in direction.bias.keys():
-                print "calculated gradient for bias", key
-                print gradient_weights.bias[key]
-                print "finite difference approximation for bias", key
-                print finite_difference_model.bias[key]
-                print "model for bias", key
-                print model.bias[key]
-            for key in direction.weights.keys():
-                print "calculated gradient for weights", key
-                print gradient_weights.weights[key]
-                print "finite difference approximation for weights", key
-                print finite_difference_model.weights[key]
-                print "model for weights", key
-                print model.weights[key]
+            for layer_num in range(model.num_layers,0,-1):
+                weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
+                bias_cur_layer = str(layer_num)
+                print "calculated gradient for bias", bias_cur_layer
+                print gradient_weights.bias[bias_cur_layer]
+                print "finite difference approximation for bias", bias_cur_layer
+                print finite_difference_model.bias[bias_cur_layer]
+                print "calculated gradient for weights", weight_cur_layer
+                print gradient_weights.weights[weight_cur_layer]
+                print "finite difference approximation for weights", weight_cur_layer
+                print finite_difference_model.weights[weight_cur_layer]
+            print "calculated gradient for bias 0"
+            print gradient_weights.bias['0']
+            print "finite difference approximation for bias 0"
+            print finite_difference_model.bias['0']
             sys.exit()
         ##########################################################
     
@@ -1506,12 +1518,10 @@ class NN_Trainer(Neural_Network):
                 if self.use_fisher_preconditioner:
                     sys.stdout.write("\r                                                                \r")
                     sys.stdout.write("part 1/3: calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
-                    weightcost = 2E-5
-                    alpha = 1E-5
                     preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model)
                     # add regularization
                     #preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
-                    preconditioner = (preconditioner + weightcost) ** (3./4.)
+                    preconditioner = (preconditioner + self.l2_regularization_const) ** (3./4.)
                     
                     #preconditioner = preconditioner.clip(preconditioner.max(excluded_keys) * 1E-4, float("Inf"), excluded_keys)
                     #preconditioner.print_statistics()
@@ -1631,38 +1641,33 @@ class NN_Trainer(Neural_Network):
                 krylov_basis['hessian'][hessian_idx,self.krylov_num_directions] = second_order_direction.dot(krylov_basis[hessian_idx], excluded_keys)
                 krylov_basis['hessian'][self.krylov_num_directions,hessian_idx] = krylov_basis['hessian'][hessian_idx,self.krylov_num_directions]
         return krylov_basis
-    def calculate_second_order_direction(self, inputs, labels, direction = None, model = None, second_order_type = None, hiddens = None, check_direction = False): #need to test
+    def calculate_second_order_direction(self, inputs, labels, direction = None, model = None, second_order_type = None, hiddens = None, check_direction = True): #need to test
         #given an input direction direction, the function returns H*d, where H is the Hessian of the weight vector
         #the function does this efficient by using the Pearlmutter (1994) trick
         excluded_keys = {'bias': ['0'], 'weights': []}
+        batch_size = inputs.shape[0]
         if model == None:
             model = self.model
         if direction == None:
             direction = self.calculate_gradient(inputs, labels, False, model)
         if second_order_type == None:
             second_order_type='gauss-newton' #other option is 'hessian'
-        batch_size = inputs.shape[0]
         if hiddens == None:
-            hiddens = self.forward_first_order_methods(inputs, model)
+            hiddens = self.forward_first_order_methods(inputs, model)    
         
-        if second_order_type == 'gauss-newton' and check_direction:
-            sys.stdout.write("with gauss-newton, assuming backward pass to be true (please check gradient if you think you have issues), so just checking pearlmutter forward pass\n")
-            sys.stdout.flush()
-            self.pearlmutter_forward_pass(labels, hiddens, model, direction, check_gradient=True)
-            
-        hidden_deriv = self.pearlmutter_forward_pass(labels, hiddens, model, direction) #nbatch x nout
         
         if second_order_type == 'gauss-newton':
+            hidden_deriv = self.pearlmutter_forward_pass(labels, hiddens, model, direction, stop_at='output') #nbatch x nout
             second_order_direction = self.backward_pass(hidden_deriv[model.num_layers], hiddens, model)
         elif second_order_type == 'hessian':
+            hidden_deriv = self.pearlmutter_forward_pass(labels, hiddens, model, direction, stop_at='linear') #nbatch x nout
             second_order_direction = self.pearlmutter_backward_pass(hidden_deriv, labels, hiddens, model, direction)
         elif second_order_type == 'fisher':
-            #pearlmutter_forward_pass calculates \grad_o'v.. now complete to loss function
-            pearlmutter_loss = numpy.array([hidden_deriv[model.num_layers][labels[index]] / hiddens[model.num_layers][labels[index]] for index in batch_size])
+            hidden_deriv = self.pearlmutter_forward_pass(labels, hiddens, model, direction, stop_at='loss') #nbatch x nout
             weight_vec = hiddens[model.num_layers] 
-            for index in batch_size:
+            for index in range(batch_size):
                 weight_vec[index, labels[index]] -= 1 
-            weight_vec *= pearlmutter_loss[:, numpy.newaxis]
+            weight_vec *= hidden_deriv[model.num_layers+1][:, numpy.newaxis]
             second_order_direction = self.backward_pass(weight_vec, hiddens, model) 
         else:
             print second_order_type, "is not a valid type. Acceptable types are gauss-newton, hessian, and fisher... Exiting now..."
@@ -1681,43 +1686,48 @@ class NN_Trainer(Neural_Network):
             
             if second_order_type == 'gauss-newton':
                 #assume that pearlmutter forward pass is correct because the function has a check_gradient flag to see if it's is
-                pass
+                sys.stdout.write("with gauss-newton, assuming backward pass to be true (please check gradient if you think you have issues), so just checking pearlmutter forward pass\n")
+                sys.stdout.flush()
+                self.pearlmutter_forward_pass(labels, hiddens, model, direction, check_gradient=True)
             elif second_order_type == 'hessian':
-                for index in batch_size:
+                sys.stdout.write("\r                                                                \r")
+                sys.stdout.write("checking Hv\n"), sys.stdout.flush()
+                for index in range(batch_size):
                     #assume that gradient calculation is correct
-                    current_gradient = self.calculate_gradient(inputs[index], labels[index], False, model)
+                    print "at batch index", index
+                    current_gradient = self.calculate_gradient(numpy.array([inputs[index]]), numpy.array([labels[index]]), False, model, l2_regularization_const = 0.)
                     
                     for key in finite_difference_model.bias.keys():
                         for index in range(direction.bias[key].size):
                             forward_loss = (model + epsilon) * current_gradient.bias[key][0][index]
                             backward_loss = (model - epsilon) * current_gradient.bias[key][0][index] 
-                            finite_difference_model.bias[key][0][index] = direction.dot((forward_loss - backward_loss) / (2 * epsilon), excluded_keys)
+                            finite_difference_model.bias[key][0][index] += direction.dot((forward_loss - backward_loss) / (2 * epsilon), excluded_keys)
                     for key in finite_difference_model.weights.keys():
                         for index0 in range(direction.weights[key].shape[0]):
                             for index1 in range(direction.weights[key].shape[1]):
                                 forward_loss = (model + epsilon) * current_gradient.weights[key][index0][index1]
                                 backward_loss = (model - epsilon) * current_gradient.weights[key][index0][index1]
-                                finite_difference_model.weights[key][index0][index1] = direction.dot((forward_loss - backward_loss) / (2 * epsilon), excluded_keys)
+                                finite_difference_model.weights[key][index0][index1] += direction.dot((forward_loss - backward_loss) / (2 * epsilon), excluded_keys)
             elif second_order_type == 'fisher':
-                for index in batch_size:
+                sys.stdout.write("\r                                                                \r")
+                sys.stdout.write("checking Fv\n"), sys.stdout.flush()
+                for index in range(batch_size):
                     #assume that gradient calculation is correct
-                    current_gradient = self.calculate_gradient(inputs[index], labels[index], False, model)
+                    print "at batch index", index
+                    current_gradient = self.calculate_gradient(numpy.array([inputs[index]]), numpy.array([labels[index]]), False, model, l2_regularization_const = 0.)                
                     finite_difference_model += current_gradient * current_gradient.dot(direction, excluded_keys)
                     
-            for key in direction.bias.keys():
-                print "calculated gradient for bias", key
-                print second_order_direction.bias[key]
-                print "finite difference approximation for bias", key
-                print finite_difference_model.bias[key]
-                print "model for bias", key
-                print model.bias[key]
-            for key in direction.weights.keys():
-                print "calculated gradient for weights", key
-                print second_order_direction.weights[key]
-                print "finite difference approximation for weights", key
-                print finite_difference_model.weights[key]
-                print "model for weights", key
-                print model.weights[key]
+            for layer_num in range(model.num_layers,0,-1):
+                weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
+                bias_cur_layer = str(layer_num)
+                print "calculated second order direction for bias", bias_cur_layer
+                print second_order_direction.bias[bias_cur_layer]
+                print "finite difference approximation for bias", bias_cur_layer
+                print finite_difference_model.bias[bias_cur_layer]
+                print "calculated second order direction for weights", weight_cur_layer
+                print second_order_direction.weights[weight_cur_layer]
+                print "finite difference approximation for weights", weight_cur_layer
+                print finite_difference_model.weights[weight_cur_layer]
             sys.exit()
         ##########################################################
                                 
@@ -1751,11 +1761,14 @@ class NN_Trainer(Neural_Network):
         if self.l2_regularization_const > 0.0:
             loss += (model.norm(excluded_keys) ** 2) * self.l2_regularization_const
         return cross_entropy, num_correct, num_examples, loss
-    def pearlmutter_forward_pass(self, labels, hiddens, model, direction, check_gradient=False): #need to test
+    def pearlmutter_forward_pass(self, labels, hiddens, model, direction, check_gradient=False, stop_at='output'): #need to test
         # let f be a function from inputs to outputs
         # consider the weights to be a vector w of parameters to be optimized, (and direction d to be the same)
         # pearlmutter_forward_pass calculates d' \jacobian_w f
         #hiddens[0] are the inputs
+        # stop at is either 'linear', 'output', or 'loss'
+        
+        batch_size = len(labels)
         hidden_deriv = {}
         hidden_deriv[1] = self.weight_matrix_multiply(hiddens[0], direction.weights['01'], direction.bias['1']) * hiddens[1] * (1-hiddens[1])
         for layer_num in range(1,model.num_layers-1):
@@ -1772,19 +1785,34 @@ class NN_Trainer(Neural_Network):
         linear_layer = (self.weight_matrix_multiply(hiddens[model.num_layers-1], direction.weights[weight_cur_layer], 
                                                     direction.bias[bias_cur_layer]) +
                         numpy.dot(hidden_deriv[model.num_layers-1], model.weights[weight_cur_layer]))
-        hidden_deriv[model.num_layers] = linear_layer * hiddens[model.num_layers] - hiddens[model.num_layers] * numpy.sum(linear_layer * hiddens[model.num_layers], axis=1)[:,numpy.newaxis]
-        
+        if stop_at == 'linear':
+            hidden_deriv[model.num_layers] = linear_layer
+        else:
+            hidden_deriv[model.num_layers] = linear_layer * hiddens[model.num_layers] - hiddens[model.num_layers] * numpy.sum(linear_layer * hiddens[model.num_layers], axis=1)[:,numpy.newaxis]
+        if stop_at == 'loss':
+            hidden_deriv[model.num_layers+1] = -numpy.array([(hidden_deriv[model.num_layers][index, labels[index]] / hiddens[model.num_layers][index, labels[index]])[0] for index in range(batch_size)])
+            
         if not check_gradient:
             return hidden_deriv
         #compare with finite differences approximation
         else:
             epsilon = 1E-10
-            finite_diff_forward = self.forward_pass(hiddens[0], verbose=False, model = model + direction * epsilon)
-            finite_diff_backward = self.forward_pass(hiddens[0], verbose=False, model = model - direction * epsilon)
+            if stop_at == 'linear':
+                calculated = hidden_deriv[model.num_layers]
+                finite_diff_forward = self.forward_pass_linear(hiddens[0], verbose=False, model = model + direction * epsilon)
+                finite_diff_backward = self.forward_pass_linear(hiddens[0], verbose=False, model = model - direction * epsilon)
+            elif stop_at == 'output':
+                calculated = hidden_deriv[model.num_layers]
+                finite_diff_forward = self.forward_pass(hiddens[0], verbose=False, model = model + direction * epsilon)
+                finite_diff_backward = self.forward_pass(hiddens[0], verbose=False, model = model - direction * epsilon)
+            elif stop_at == 'loss':
+                calculated = hidden_deriv[model.num_layers + 1]
+                finite_diff_forward = -numpy.log([max(self.forward_pass(hiddens[0], verbose=False, model = model + direction * epsilon).item((x,labels[x])),1E-12) for x in range(labels.size)]) 
+                finite_diff_backward =  -numpy.log([max(self.forward_pass(hiddens[0], verbose=False, model = model - direction * epsilon).item((x,labels[x])),1E-12) for x in range(labels.size)]) 
             print "pearlmutter calculation"
-            print hidden_deriv[model.num_layers][1]
+            print calculated
             print "finite differences approximation, epsilon", epsilon
-            print ((finite_diff_forward - finite_diff_backward) / (2 * epsilon))[1]
+            print ((finite_diff_forward - finite_diff_backward) / (2 * epsilon))
             sys.exit()
         ######################################################################
         
@@ -1793,6 +1821,7 @@ class NN_Trainer(Neural_Network):
             model = self.model
         output_model = Neural_Network_Weight(num_layers=model.num_layers)
         output_model.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
+        hidden_deriv[0] = numpy.zeros(hiddens[0].shape)
         #derivative of log(cross-entropy softmax)
         weight_vec = hiddens[model.num_layers] #batchsize x n_outputs
         batch_size = len(batch_labels)
@@ -1813,13 +1842,15 @@ class NN_Trainer(Neural_Network):
             bias_cur_layer = str(layer_num)
             d_hidden = hiddens[layer_num] * (1-hiddens[layer_num]) #derivative of sigmoid
             d2_hidden_div_d_hidden = (1. - 2. * hiddens[layer_num])
+            old_weight_vec = weight_vec
             weight_vec = numpy.dot(weight_vec, numpy.transpose(model.weights[weight_next_layer])) * d_hidden
-            weight_vec_deriv = (weight_vec * d2_hidden_div_d_hidden * hidden_deriv[weight_cur_layer] + 
-                                (numpy.dot(weight_vec, numpy.transpose(direction.weights[weight_next_layer])) +
+            weight_vec_deriv = (weight_vec * d2_hidden_div_d_hidden * hidden_deriv[layer_num] + 
+                                (numpy.dot(old_weight_vec, numpy.transpose(direction.weights[weight_next_layer])) +
                                  numpy.dot(weight_vec_deriv, numpy.transpose(model.weights[weight_next_layer]))) * d_hidden)
             output_model.bias[bias_cur_layer][0] = sum(weight_vec_deriv) #this is somewhat ugly
             output_model.weights[weight_cur_layer] = (numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec_deriv) +
                                                       numpy.dot(numpy.transpose(hidden_deriv[layer_num-1]), weight_vec))
+        
         return output_model
     def calculate_subspace_cross_entropy(self, parameters, basis, inputs, labels, model = None):
         #helper function for scipy bfgs
@@ -2011,7 +2042,6 @@ class NN_Trainer(Neural_Network):
                            verbose = False, preconditioner = None, gradient = None, second_order_type='gauss-newton', 
                            init_search_direction = None):
         #minimizes function q_x(p) = \grad_x f(x)' p + 1/2 * p'Gp (where x is fixed) use linear conjugate gradient
-        
         if verbose:
             print "preconditioner is", preconditioner
         excluded_keys = {'bias':['0'], 'weights':[]} 
@@ -2057,9 +2087,9 @@ class NN_Trainer(Neural_Network):
             sys.stdout.write("\rconjugate gradient epoch %d of %d\r" % (epoch+1, num_epochs)), sys.stdout.flush()
             
             if damping_factor > 0.0:
-                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, search_direction, model, second_order_type='gauss-newton', hiddens = hiddens) + search_direction * damping_factor
+                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, search_direction, model, second_order_type=second_order_type, hiddens = hiddens) + search_direction * damping_factor
             else:
-                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, search_direction, model, second_order_type='gauss-newton', hiddens = hiddens)
+                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, search_direction, model, second_order_type=second_order_type, hiddens = hiddens)
                                                                             
             curvature = search_direction.dot(second_order_direction,excluded_keys)
             if curvature <= 0:

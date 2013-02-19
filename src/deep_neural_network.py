@@ -1660,7 +1660,7 @@ class NN_Trainer(Neural_Network):
             hidden_deriv = self.pearlmutter_forward_pass(labels, hiddens, model, direction, stop_at='output') #nbatch x nout
             second_order_direction = self.backward_pass(hidden_deriv[model.num_layers], hiddens, model)
         elif second_order_type == 'hessian':
-            hidden_deriv = self.pearlmutter_forward_pass(labels, hiddens, model, direction, stop_at='linear') #nbatch x nout
+            hidden_deriv = self.pearlmutter_forward_pass(labels, hiddens, model, direction, stop_at='output') #nbatch x nout
             second_order_direction = self.pearlmutter_backward_pass(hidden_deriv, labels, hiddens, model, direction)
         elif second_order_type == 'fisher':
             hidden_deriv = self.pearlmutter_forward_pass(labels, hiddens, model, direction, stop_at='loss') #nbatch x nout
@@ -1692,28 +1692,41 @@ class NN_Trainer(Neural_Network):
             elif second_order_type == 'hessian':
                 sys.stdout.write("\r                                                                \r")
                 sys.stdout.write("checking Hv\n"), sys.stdout.flush()
-                for index in range(batch_size):
+                for batch_index in range(batch_size):
                     #assume that gradient calculation is correct
-                    print "at batch index", index
-                    current_gradient = self.calculate_gradient(numpy.array([inputs[index]]), numpy.array([labels[index]]), False, model, l2_regularization_const = 0.)
+                    print "at batch index", batch_index
+                    update = Neural_Network_Weight(num_layers=model.num_layers)
+                    update.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
+                    
+                    current_gradient = self.calculate_gradient(numpy.array([inputs[batch_index]]), numpy.array([labels[batch_index]]), False, model, l2_regularization_const = 0.)
                     
                     for key in finite_difference_model.bias.keys():
                         for index in range(direction.bias[key].size):
-                            forward_loss = (model + epsilon) * current_gradient.bias[key][0][index]
-                            backward_loss = (model - epsilon) * current_gradient.bias[key][0][index] 
+                            update.bias[key][0][index] = epsilon
+                            forward_loss = self.calculate_gradient(numpy.array([inputs[batch_index]]), numpy.array([labels[batch_index]]), False, 
+                                                                   model = model + update, l2_regularization_const = 0.)
+                            backward_loss = self.calculate_gradient(numpy.array([inputs[batch_index]]), numpy.array([labels[batch_index]]), False, 
+                                                                    model = model - update, l2_regularization_const = 0.)
                             finite_difference_model.bias[key][0][index] += direction.dot((forward_loss - backward_loss) / (2 * epsilon), excluded_keys)
+                            update.bias[key][0][index] = 0.0
+                        if batch_index == 0 and key == '4':
+                            print finite_difference_model.bias[key]
                     for key in finite_difference_model.weights.keys():
                         for index0 in range(direction.weights[key].shape[0]):
                             for index1 in range(direction.weights[key].shape[1]):
-                                forward_loss = (model + epsilon) * current_gradient.weights[key][index0][index1]
-                                backward_loss = (model - epsilon) * current_gradient.weights[key][index0][index1]
+                                update.weights[key][index0][index1] = epsilon
+                                forward_loss = self.calculate_gradient(numpy.array([inputs[batch_index]]), numpy.array([labels[batch_index]]), False, 
+                                                                       model = model + update, l2_regularization_const = 0.) 
+                                backward_loss = self.calculate_gradient(numpy.array([inputs[batch_index]]), numpy.array([labels[batch_index]]), False, 
+                                                                        model = model - update, l2_regularization_const = 0.)
                                 finite_difference_model.weights[key][index0][index1] += direction.dot((forward_loss - backward_loss) / (2 * epsilon), excluded_keys)
+                                update.weights[key][index0][index1] = 0.0
             elif second_order_type == 'fisher':
                 sys.stdout.write("\r                                                                \r")
                 sys.stdout.write("checking Fv\n"), sys.stdout.flush()
-                for index in range(batch_size):
+                for batch_index in range(batch_size):
                     #assume that gradient calculation is correct
-                    print "at batch index", index
+                    print "at batch index", batch_index
                     current_gradient = self.calculate_gradient(numpy.array([inputs[index]]), numpy.array([labels[index]]), False, model, l2_regularization_const = 0.)                
                     finite_difference_model += current_gradient * current_gradient.dot(direction, excluded_keys)
                     
@@ -1832,6 +1845,7 @@ class NN_Trainer(Neural_Network):
         #average layers in batch
         weight_cur_layer = ''.join([str(model.num_layers-1), str(model.num_layers)])
         bias_cur_layer = str(model.num_layers)
+        print weight_vec_deriv
         output_model.bias[bias_cur_layer][0] = sum(weight_vec_deriv)
         output_model.weights[weight_cur_layer] = (numpy.dot(numpy.transpose(hiddens[model.num_layers-1]), weight_vec_deriv) +
                                                   numpy.dot(numpy.transpose(hidden_deriv[model.num_layers-1]), weight_vec))

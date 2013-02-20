@@ -1686,9 +1686,60 @@ class NN_Trainer(Neural_Network):
             
             if second_order_type == 'gauss-newton':
                 #assume that pearlmutter forward pass is correct because the function has a check_gradient flag to see if it's is
-                sys.stdout.write("with gauss-newton, assuming backward pass to be true (please check gradient if you think you have issues), so just checking pearlmutter forward pass\n")
-                sys.stdout.flush()
-                self.pearlmutter_forward_pass(labels, hiddens, model, direction, check_gradient=True)
+                sys.stdout.write("\r                                                                \r")
+                sys.stdout.write("checking Gv\n"), sys.stdout.flush()
+                weight_cur_layer = ''.join([str(model.num_layers-1),str(model.num_layers)])
+                bias_cur_layer = str(model.num_layers)
+                linear_out = self.forward_pass_linear(inputs, verbose=False, model = model)
+                finite_diff_forward = self.forward_pass_linear(inputs, verbose=False, model = model + direction * epsilon)
+                finite_diff_backward = self.forward_pass_linear(inputs, verbose=False, model = model - direction * epsilon)
+                finite_diff_jacobian_vec = (finite_diff_forward - finite_diff_backward) / (2 * epsilon)
+                finite_diff_HJv = numpy.zeros(finite_diff_jacobian_vec.shape)
+                
+                num_outputs = len(linear_out[0])
+                collapsed_hessian = numpy.zeros((num_outputs,num_outputs))
+                for batch_index in range(batch_size):
+                    #calculate collapsed Hessian
+                    direction1 = numpy.zeros(finite_diff_forward[0].shape)
+                    direction2 = numpy.zeros(finite_diff_forward[0].shape)
+                    for index1 in range(len(finite_diff_forward[0])):
+                        for index2 in range(len(finite_diff_forward[0])):
+                            direction1[index1] = epsilon
+                            direction2[index2] = epsilon
+                            loss_plus_plus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] + direction1 + direction2])), numpy.array([labels[batch_index]]))
+                            loss_plus_minus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] + direction1 - direction2])), numpy.array([labels[batch_index]]))
+                            loss_minus_plus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] - direction1 + direction2])), numpy.array([labels[batch_index]]))
+                            loss_minus_minus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] - direction1 - direction2])), numpy.array([labels[batch_index]]))
+                            collapsed_hessian[index1,index2] = (loss_plus_plus + loss_minus_minus - loss_minus_plus - loss_plus_minus) / (4 * epsilon * epsilon)
+                            direction1[index1] = 0.0
+                            direction2[index2] = 0.0
+                    print collapsed_hessian
+                    out = self.softmax(numpy.array([linear_out[batch_index]]))
+                    print numpy.diag(out[0]) - numpy.outer(out[0], out[0])
+                    finite_diff_HJv[batch_index] += numpy.dot(collapsed_hessian, finite_diff_jacobian_vec[batch_index])
+                    
+                for batch_index in range(batch_size):
+                    #calculate J'd = J'HJv
+                    update = Neural_Network_Weight(num_layers=model.num_layers)
+                    update.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
+                    for key in direction.bias.keys():
+                        print "at bias key", key
+                        for index in range(direction.bias[key].size):
+                            update.bias[key][0][index] = epsilon
+                            #print direction.norm()
+                            forward_loss = self.forward_pass_linear(numpy.array([inputs[batch_index]]), verbose=False, model = model + update)
+                            backward_loss = self.forward_pass_linear(numpy.array([inputs[batch_index]]), verbose=False, model = model - update)
+                            finite_difference_model.bias[key][0][index] += numpy.dot((forward_loss - backward_loss) / (2 * epsilon), finite_diff_HJv[batch_index])
+                            update.bias[key][0][index] = 0.0
+                    for key in direction.weights.keys():
+                        print "at weight key", key
+                        for index0 in range(direction.weights[key].shape[0]):
+                            for index1 in range(direction.weights[key].shape[1]):
+                                update.weights[key][index0][index1] = epsilon
+                                forward_loss = self.forward_pass_linear(numpy.array([inputs[batch_index]]), verbose=False, model= model + update)
+                                backward_loss = self.forward_pass_linear(numpy.array([inputs[batch_index]]), verbose=False, model= model - update)
+                                finite_difference_model.weights[key][index0][index1] += numpy.dot((forward_loss - backward_loss) / (2 * epsilon), finite_diff_HJv[batch_index])
+                                update.weights[key][index0][index1] = 0.0
             elif second_order_type == 'hessian':
                 sys.stdout.write("\r                                                                \r")
                 sys.stdout.write("checking Hv\n"), sys.stdout.flush()
@@ -1709,8 +1760,7 @@ class NN_Trainer(Neural_Network):
                                                                     model = model - update, l2_regularization_const = 0.)
                             finite_difference_model.bias[key][0][index] += direction.dot((forward_loss - backward_loss) / (2 * epsilon), excluded_keys)
                             update.bias[key][0][index] = 0.0
-                        if batch_index == 0 and key == '4':
-                            print finite_difference_model.bias[key]
+        
                     for key in finite_difference_model.weights.keys():
                         for index0 in range(direction.weights[key].shape[0]):
                             for index1 in range(direction.weights[key].shape[1]):
@@ -1845,7 +1895,6 @@ class NN_Trainer(Neural_Network):
         #average layers in batch
         weight_cur_layer = ''.join([str(model.num_layers-1), str(model.num_layers)])
         bias_cur_layer = str(model.num_layers)
-        print weight_vec_deriv
         output_model.bias[bias_cur_layer][0] = sum(weight_vec_deriv)
         output_model.weights[weight_cur_layer] = (numpy.dot(numpy.transpose(hiddens[model.num_layers-1]), weight_vec_deriv) +
                                                   numpy.dot(numpy.transpose(hidden_deriv[model.num_layers-1]), weight_vec))

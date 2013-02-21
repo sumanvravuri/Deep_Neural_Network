@@ -394,9 +394,9 @@ class Neural_Network_Weight(object):
         nn_output = copy.deepcopy(self)
         if type(divisor) is Neural_Network_Weight:
             for key in self.bias.keys():
-                nn_output.bias[key] = self.bias[key] * divisor.bias[key]
+                nn_output.bias[key] = self.bias[key] / divisor.bias[key]
             for key in self.weights.keys():
-                nn_output.weights[key] = self.weights[key] * divisor.weights[key]
+                nn_output.weights[key] = self.weights[key] / divisor.weights[key]
             return nn_output
         #otherwise scalar type
         divisor = float(divisor)
@@ -1339,23 +1339,23 @@ class NN_Trainer(Neural_Network):
             output_model.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
         return output_model
     def line_search(self, batch_inputs, batch_labels, direction, max_step_size=0.1, #completed, way expensive, should be compiled
-                    max_line_searches=20, init_step_size=0.0, model = None): 
-        # the line search algorithm is basically as follows
-        # we have directional derivative of p_k at cross_entropy(0), in gradient_direction, self.armijo_const, and self.wolfe_const, and stepsize_max, current cross-entropy in batch
-        # choose stepsize to be between 0 and stepsize_max (usually by finding minimum or quadratic, cubic, or quartic function)
-        #while loop
-        #    evaluate cross-entropy at point weight + stepsize * gradient direction
-        #    if numerical issue (cross_entropy is inf, etc).
-        #        divide step_size by 2 and try again
-        #    if fails first Wolfe condition (i.e., evaluated_cross_entropy > current_cross_entropy + self.armijo_const * stepsize * dir_deriv(cross_ent(0))
-        #        interpolate between (prev_stepsize, cur_stepsize) and return that stepsize #we went too far in the current direction
-        #    #if not we made it past first Wolfe condition
-        #    calculate directional derivative at proposed point
-        #    if made it past second Wolfe condition (i.e., abs(prop_dir_deriv) <= -self.wolfe_const dir_deriv(0)
-        #        finished line search
-        #    elif dir_deriv(proposed) >= 0 #missed minimum before
-        #        interp between current step size and previous one
-        #     otherwise we essentially didn't go far enough with our step size, so find step_size between current_stepsize and max_stepsize
+                    max_line_searches=20, init_step_size=0.0, model = None, verbose=False): 
+        """the line search algorithm is basically as follows
+         we have directional derivative of p_k at cross_entropy(0), in gradient_direction, self.armijo_const, and self.wolfe_const, and stepsize_max, current cross-entropy in batch
+         choose stepsize to be between 0 and stepsize_max (usually by finding minimum or quadratic, cubic, or quartic function)
+        while loop
+            evaluate cross-entropy at point weight + stepsize * gradient direction
+            if numerical issue (cross_entropy is inf, etc).
+                divide step_size by 2 and try again
+            if fails first Wolfe condition (i.e., evaluated_cross_entropy > current_cross_entropy + self.armijo_const * stepsize * dir_deriv(cross_ent(0))
+                interpolate between (prev_stepsize, cur_stepsize) and return that stepsize #we went too far in the current direction
+            if not we made it past first Wolfe condition
+            calculate directional derivative at proposed point
+            if made it past second Wolfe condition (i.e., abs(prop_dir_deriv) <= -self.wolfe_const dir_deriv(0)
+                finished line search
+            elif dir_deriv(proposed) >= 0 #missed minimum before
+                interp between current step size and previous one
+             otherwise we essentially didn't go far enough with our step size, so find step_size between current_stepsize and max_stepsize"""
         
         
         if model == None:
@@ -1397,7 +1397,7 @@ class NN_Trainer(Neural_Network):
                 continue
             if proposed_loss > zero_step_loss + self.armijo_const * step_size * zero_step_directional_derivative: #fails Armijo rule, but we have found our bracket
                 # we now know that Wolfe conditions are satisfied between prev_step_size  and proposed_step_size
-                #print "Armijo rule failed, so generating brackets"
+                if verbose: print "Armijo rule failed, so generating brackets"
                 upper_bracket = step_size
                 upper_bracket_loss = proposed_loss
                 upper_bracket_deriv = direction.dot(self.calculate_gradient(batch_inputs, batch_labels, False, model), excluded_keys)
@@ -1408,11 +1408,12 @@ class NN_Trainer(Neural_Network):
             proposed_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels, False, model = model + direction * step_size), excluded_keys)
             
             if abs(proposed_directional_derivative) <= -self.wolfe_const * zero_step_directional_derivative: #satisfies strong Wolfe condition
-                #print "Wolfe conditions satisfied"
-                #print "returned step size", step_size
+                if verbose:
+                    print "Wolfe conditions satisfied"
+                    print "returned step size", step_size
                 return step_size
             elif proposed_directional_derivative >= 0:
-                #print "went too far for second order condition, brackets found"
+                if verbose: print "went too far for second order condition, brackets found"
                 lower_bracket = step_size
                 lower_bracket_loss = proposed_loss
                 lower_bracket_deriv = proposed_directional_derivative
@@ -1431,34 +1432,40 @@ class NN_Trainer(Neural_Network):
         remaining_line_searches = max_line_searches - num_line_searches
         
         for _ in range(remaining_line_searches): #searching for good step sizes within bracket
-            #print "upper bracket:", upper_bracket, "lower bracket:", lower_bracket
+            if verbose: print "upper bracket:", upper_bracket, "lower bracket:", lower_bracket
             step_size = self.interpolate_step_size((upper_bracket, upper_bracket_loss, upper_bracket_deriv),
-                                                        (lower_bracket, lower_bracket_loss, lower_bracket_deriv))
+                                                    (lower_bracket, lower_bracket_loss, lower_bracket_deriv))
+            mix_const = numpy.abs((step_size - lower_bracket) / (upper_bracket - lower_bracket))
+            if mix_const < 0.05 or mix_const > 0.95:
+                step_size = (upper_bracket + lower_bracket) / 2
+            if verbose: print "proposed step size is", step_size
             proposed_loss = self.calculate_loss(batch_inputs, batch_labels, model = model + direction * step_size) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False,model = model + direction * step_size), batch_labels)
             proposed_directional_derivative = direction.dot(self.calculate_gradient(batch_inputs, batch_labels, model = model + direction * step_size), excluded_keys)
             if proposed_loss > zero_step_loss + self.armijo_const * step_size * zero_step_directional_derivative or proposed_loss >= lower_bracket_loss:
-                #print "Armijo rule failed, adjusting brackets"
+                if verbose: print "Armijo rule failed, adjusting brackets"
                 upper_bracket = step_size
                 upper_bracket_loss = proposed_loss
                 upper_bracket_deriv = proposed_directional_derivative
             else:
-                #print "Armijo rule satisfied"
+                if verbose: print "Armijo rule satisfied"
                 if abs(proposed_directional_derivative) <= -self.wolfe_const * zero_step_directional_derivative: #satisfies strong Wolfe condition
-                    #print "satisfied Wolfe conditions"
-                    #print "returned step size", step_size
+                    if verbose:
+                        print "satisfied Wolfe conditions"
+                        print "returned step size", step_size
                     return step_size
                 elif proposed_directional_derivative * (upper_bracket - lower_bracket) >= 0:
-                    #print "went too far on step ... adjusting brackets"
+                    if verbose: print "went too far on step ... adjusting brackets"
                     upper_bracket = lower_bracket
                     upper_bracket_loss = lower_bracket_loss
                     upper_bracket_deriv = lower_bracket_deriv
                 lower_bracket = step_size
                 lower_bracket_loss = proposed_loss
                 lower_bracket_deriv = proposed_directional_derivative
-        #print "returning 0.0 step size"        
+        if verbose: print "returning 0.0 step size"        
         return 0.0 #line search failed
     def interpolate_step_size(self, p1, p2): #completed
-        #p1 and p2 are tuples in form (x,f(x), f'(x)) and spits out minimum step size based on cubic interpolation of data
+        """p1 and p2 are tuples in form (x,f(x), f'(x)) and spits out minimum step size based on cubic interpolation of data
+            from page 56 of Numerical Optimization, Nocedal and Wright, 2nd edition"""
         if abs(p2[0] - p1[0]) < 1E-4:
             #print "difference between two step sizes is small. |p2 -p1| =", abs(p2[0] - p1[0]), "returning bisect"
             return (p1[0] + p2[0]) / 2
@@ -1519,6 +1526,7 @@ class NN_Trainer(Neural_Network):
                     sys.stdout.write("\r                                                                \r")
                     sys.stdout.write("part 1/3: calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
                     preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model)
+                    #precon = (grad2 + mones(psize,1)*conv(lambda) + maskp*conv(weightcost)).^(3/4);
                     # add regularization
                     #preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
                     preconditioner = (preconditioner + self.l2_regularization_const) ** (3./4.)
@@ -1641,7 +1649,7 @@ class NN_Trainer(Neural_Network):
                 krylov_basis['hessian'][hessian_idx,self.krylov_num_directions] = second_order_direction.dot(krylov_basis[hessian_idx], excluded_keys)
                 krylov_basis['hessian'][self.krylov_num_directions,hessian_idx] = krylov_basis['hessian'][hessian_idx,self.krylov_num_directions]
         return krylov_basis
-    def calculate_second_order_direction(self, inputs, labels, direction = None, model = None, second_order_type = None, hiddens = None, check_direction = True): #need to test
+    def calculate_second_order_direction(self, inputs, labels, direction = None, model = None, second_order_type = None, hiddens = None, check_direction = False): #need to test
         #given an input direction direction, the function returns H*d, where H is the Hessian of the weight vector
         #the function does this efficient by using the Pearlmutter (1994) trick
         excluded_keys = {'bias': ['0'], 'weights': []}
@@ -1706,15 +1714,15 @@ class NN_Trainer(Neural_Network):
                         for index2 in range(len(finite_diff_forward[0])):
                             direction1[index1] = epsilon
                             direction2[index2] = epsilon
-                            loss_plus_plus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] + direction1 + direction2])), numpy.array([labels[batch_index]]))
-                            loss_plus_minus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] + direction1 - direction2])), numpy.array([labels[batch_index]]))
-                            loss_minus_plus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] - direction1 + direction2])), numpy.array([labels[batch_index]]))
-                            loss_minus_minus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] - direction1 - direction2])), numpy.array([labels[batch_index]]))
+                            loss_plus_plus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] + direction1 + direction2])), labels[batch_index:batch_index+1])
+                            loss_plus_minus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] + direction1 - direction2])), labels[batch_index:batch_index+1])
+                            loss_minus_plus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] - direction1 + direction2])), labels[batch_index:batch_index+1])
+                            loss_minus_minus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] - direction1 - direction2])), labels[batch_index:batch_index+1])
                             collapsed_hessian[index1,index2] = (loss_plus_plus + loss_minus_minus - loss_minus_plus - loss_plus_minus) / (4 * epsilon * epsilon)
                             direction1[index1] = 0.0
                             direction2[index2] = 0.0
                     print collapsed_hessian
-                    out = self.softmax(numpy.array([linear_out[batch_index]]))
+                    out = self.softmax(linear_out[batch_index:batch_index+1])
                     print numpy.diag(out[0]) - numpy.outer(out[0], out[0])
                     finite_diff_HJv[batch_index] += numpy.dot(collapsed_hessian, finite_diff_jacobian_vec[batch_index])
                     
@@ -1727,8 +1735,8 @@ class NN_Trainer(Neural_Network):
                         for index in range(direction.bias[key].size):
                             update.bias[key][0][index] = epsilon
                             #print direction.norm()
-                            forward_loss = self.forward_pass_linear(numpy.array([inputs[batch_index]]), verbose=False, model = model + update)
-                            backward_loss = self.forward_pass_linear(numpy.array([inputs[batch_index]]), verbose=False, model = model - update)
+                            forward_loss = self.forward_pass_linear(inputs[batch_index:batch_index+1], verbose=False, model = model + update)
+                            backward_loss = self.forward_pass_linear(inputs[batch_index:batch_index+1], verbose=False, model = model - update)
                             finite_difference_model.bias[key][0][index] += numpy.dot((forward_loss - backward_loss) / (2 * epsilon), finite_diff_HJv[batch_index])
                             update.bias[key][0][index] = 0.0
                     for key in direction.weights.keys():
@@ -1736,8 +1744,8 @@ class NN_Trainer(Neural_Network):
                         for index0 in range(direction.weights[key].shape[0]):
                             for index1 in range(direction.weights[key].shape[1]):
                                 update.weights[key][index0][index1] = epsilon
-                                forward_loss = self.forward_pass_linear(numpy.array([inputs[batch_index]]), verbose=False, model= model + update)
-                                backward_loss = self.forward_pass_linear(numpy.array([inputs[batch_index]]), verbose=False, model= model - update)
+                                forward_loss = self.forward_pass_linear(inputs[batch_index:batch_index+1], verbose=False, model= model + update)
+                                backward_loss = self.forward_pass_linear(inputs[batch_index:batch_index+1], verbose=False, model= model - update)
                                 finite_difference_model.weights[key][index0][index1] += numpy.dot((forward_loss - backward_loss) / (2 * epsilon), finite_diff_HJv[batch_index])
                                 update.weights[key][index0][index1] = 0.0
             elif second_order_type == 'hessian':
@@ -1749,14 +1757,14 @@ class NN_Trainer(Neural_Network):
                     update = Neural_Network_Weight(num_layers=model.num_layers)
                     update.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
                     
-                    current_gradient = self.calculate_gradient(numpy.array([inputs[batch_index]]), numpy.array([labels[batch_index]]), False, model, l2_regularization_const = 0.)
+                    current_gradient = self.calculate_gradient(inputs[batch_index:batch_index+1], labels[batch_index:batch_index+1], False, model, l2_regularization_const = 0.)
                     
                     for key in finite_difference_model.bias.keys():
                         for index in range(direction.bias[key].size):
                             update.bias[key][0][index] = epsilon
-                            forward_loss = self.calculate_gradient(numpy.array([inputs[batch_index]]), numpy.array([labels[batch_index]]), False, 
+                            forward_loss = self.calculate_gradient(inputs[batch_index:batch_index+1], labels[batch_index:batch_index+1], False, 
                                                                    model = model + update, l2_regularization_const = 0.)
-                            backward_loss = self.calculate_gradient(numpy.array([inputs[batch_index]]), numpy.array([labels[batch_index]]), False, 
+                            backward_loss = self.calculate_gradient(inputs[batch_index:batch_index+1], labels[batch_index:batch_index+1], False, 
                                                                     model = model - update, l2_regularization_const = 0.)
                             finite_difference_model.bias[key][0][index] += direction.dot((forward_loss - backward_loss) / (2 * epsilon), excluded_keys)
                             update.bias[key][0][index] = 0.0
@@ -1765,9 +1773,9 @@ class NN_Trainer(Neural_Network):
                         for index0 in range(direction.weights[key].shape[0]):
                             for index1 in range(direction.weights[key].shape[1]):
                                 update.weights[key][index0][index1] = epsilon
-                                forward_loss = self.calculate_gradient(numpy.array([inputs[batch_index]]), numpy.array([labels[batch_index]]), False, 
+                                forward_loss = self.calculate_gradient(inputs[batch_index:batch_index+1], labels[batch_index:batch_index+1], False, 
                                                                        model = model + update, l2_regularization_const = 0.) 
-                                backward_loss = self.calculate_gradient(numpy.array([inputs[batch_index]]), numpy.array([labels[batch_index]]), False, 
+                                backward_loss = self.calculate_gradient(inputs[batch_index:batch_index+1], labels[batch_index:batch_index+1], False, 
                                                                         model = model - update, l2_regularization_const = 0.)
                                 finite_difference_model.weights[key][index0][index1] += direction.dot((forward_loss - backward_loss) / (2 * epsilon), excluded_keys)
                                 update.weights[key][index0][index1] = 0.0
@@ -1777,7 +1785,7 @@ class NN_Trainer(Neural_Network):
                 for batch_index in range(batch_size):
                     #assume that gradient calculation is correct
                     print "at batch index", batch_index
-                    current_gradient = self.calculate_gradient(numpy.array([inputs[index]]), numpy.array([labels[index]]), False, model, l2_regularization_const = 0.)                
+                    current_gradient = self.calculate_gradient(inputs[batch_index:batch_index+1], labels[batch_index:batch_index+1], False, model, l2_regularization_const = 0.)                
                     finite_difference_model += current_gradient * current_gradient.dot(direction, excluded_keys)
                     
             for layer_num in range(model.num_layers,0,-1):
@@ -1825,11 +1833,11 @@ class NN_Trainer(Neural_Network):
             loss += (model.norm(excluded_keys) ** 2) * self.l2_regularization_const
         return cross_entropy, num_correct, num_examples, loss
     def pearlmutter_forward_pass(self, labels, hiddens, model, direction, check_gradient=False, stop_at='output'): #need to test
-        # let f be a function from inputs to outputs
-        # consider the weights to be a vector w of parameters to be optimized, (and direction d to be the same)
-        # pearlmutter_forward_pass calculates d' \jacobian_w f
-        #hiddens[0] are the inputs
-        # stop at is either 'linear', 'output', or 'loss'
+        """let f be a function from inputs to outputs
+        consider the weights to be a vector w of parameters to be optimized, (and direction d to be the same)
+        pearlmutter_forward_pass calculates d' \jacobian_w f
+        hiddens[0] are the inputs
+        stop_at is either 'linear', 'output', or 'loss' """
         
         batch_size = len(labels)
         hidden_deriv = {}
@@ -1996,7 +2004,7 @@ class NN_Trainer(Neural_Network):
             #print ", before line search, directional derivative is", dir_derivative
             step = self.line_search(batch_inputs, batch_labels, model_direction, max_step_size=1.5, 
                                     max_line_searches=self.num_line_searches, init_step_size=init_step_size, 
-                                    model = model + model_update)
+                                    model = model + model_update, verbose=False)
             if step == 0.0:
                 print "\rline search failed, returning current step\r", #not updating any parameters"
                 return cur_step
@@ -2070,10 +2078,10 @@ class NN_Trainer(Neural_Network):
                     sys.stdout.write("\r                                                                \r")
                     sys.stdout.write("calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
                     
-                    #alpha = 1E-5
+                    alpha = 1E-5
                     preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model)
                     # add regularization
-                    #preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
+                    preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
                     preconditioner = (preconditioner + self.l2_regularization_const) ** (3./4.)
                 
                 model_update, model_vals = self.conjugate_gradient(batch_inputs, batch_labels, self.truncated_newton_num_cg_epochs, model=self.model, 

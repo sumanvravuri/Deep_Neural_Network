@@ -450,6 +450,8 @@ class Neural_Network_Weight(object):
             self.weights[key] /= scalar
         return self
     def __pow__(self, scalar):
+        if scalar == 2:
+            return self * self
         scalar = float(scalar)
         nn_output = copy.deepcopy(self)
         for key in self.bias.keys():
@@ -490,7 +492,8 @@ class Neural_Network(object, Vector_Math):
                                'conjugate_max_iterations', 'conjugate_const_type',
                                'truncated_newton_num_cg_epochs', 'truncated_newton_init_damping_factor',
                                'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix',
-                               'krylov_use_hessian_preconditioner', 'use_fisher_preconditioner', 'krylov_eigenvalue_floor_const']
+                               'krylov_use_hessian_preconditioner', 'krylov_eigenvalue_floor_const', 
+                               'fisher_preconditioner_floor_val', 'use_fisher_preconditioner']
         self.required_variables['test'] =  ['mode', 'feature_file_name', 'weight_matrix_name', 'output_name']
         self.all_variables['test'] =  self.required_variables['test'] + ['label_file_name']
     def dump_config_vals(self):
@@ -746,7 +749,7 @@ class NN_Tester(Neural_Network): #completed
         
 class NN_Trainer(Neural_Network):
     def __init__(self,config_dictionary): #completed
-        #variables in NN_trainer object are:
+        """variables in NN_trainer object are:
         #mode (set to 'train')
         #feature_file_name - inherited from Neural_Network class, name of feature file (in .mat format with variable 'features' in it) to read from
         #features - inherited from Neural_Network class, features
@@ -772,7 +775,7 @@ class NN_Trainer(Neural_Network):
         # At bare minimum, you'll need these variables set to train
         # feature_file_name
         # output_name
-        # this will run logistic regression using steepest descent, which is a bad idea
+        # this will run logistic regression using steepest descent, which is a bad idea"""
         
         #Raise error if we encounter under/overflow during training, because this is bad... code should handle this gracefully
         old_settings = numpy.seterr(over='raise',under='raise',invalid='raise')
@@ -872,12 +875,16 @@ class NN_Trainer(Neural_Network):
                     if self.krylov_use_hessian_preconditioner:
                         self.krylov_eigenvalue_floor_const = self.default_variable_define(config_dictionary, 'krylov_eigenvalue_floor_const', arg_type='float', default_value=1E-4)
                     self.use_fisher_preconditioner = self.default_variable_define(config_dictionary, 'use_fisher_preconditioner', arg_type='boolean', default_value=False)
+                    if self.use_fisher_preconditioner:
+                        self.fisher_preconditioner_floor_val = self.default_variable_define(config_dictionary, 'fisher_preconditioner_floor_val', arg_type='float', default_value=1E-4)
                     self.armijo_const = self.default_variable_define(config_dictionary, 'armijo_const', arg_type='float', default_value=0.0001)
                     self.wolfe_const = self.default_variable_define(config_dictionary, 'wolfe_const', arg_type='float', default_value=0.9)
                 elif self.backprop_method == 'truncated_newton':
                     self.second_order_matrix = self.default_variable_define(config_dictionary, 'second_order_matrix', arg_type='string', default_value='gauss-newton', 
                                                                             acceptable_values=['gauss-newton', 'hessian'])
                     self.use_fisher_preconditioner = self.default_variable_define(config_dictionary, 'use_fisher_preconditioner', arg_type='boolean', default_value=False)
+                    if self.use_fisher_preconditioner:
+                        self.fisher_preconditioner_floor_val = self.default_variable_define(config_dictionary, 'fisher_preconditioner_floor_val', arg_type='float', default_value=1E-4)
                     self.truncated_newton_num_cg_epochs = self.default_variable_define(config_dictionary, 'truncated_newton_num_cg_epochs', arg_type='int', default_value=20)
                     self.truncated_newton_init_damping_factor = self.default_variable_define(config_dictionary, 'truncated_newton_init_damping_factor', arg_type='float', default_value=0.1)
         self.dump_config_vals()
@@ -1021,8 +1028,8 @@ class NN_Trainer(Neural_Network):
                     weight_update = numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
                     
                 #do final weight_update
-                self.model.weights[weight_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * (weight_update - self.l2_regularization_const * self.model.weights[weight_next_layer])
-                self.model.bias[bias_cur_layer][0] += self.steepest_learning_rate[epoch_num] / batch_size * (bias_update - self.l2_regularization_const * self.model.bias[bias_next_layer][0])
+                self.model.weights[weight_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * (weight_update - self.l2_regularization_const * self.model.weights[weight_cur_layer])
+                self.model.bias[bias_cur_layer][0] += self.steepest_learning_rate[epoch_num] / batch_size * (bias_update - self.l2_regularization_const * self.model.bias[bias_cur_layer][0])
 
                 batch_index += self.backprop_batch_size
             sys.stdout.write("\r100.0% done \r"), sys.stdout.flush()
@@ -1035,6 +1042,7 @@ class NN_Trainer(Neural_Network):
             
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
+                
     def backprop_conjugate_gradient(self): #Running... need preconditioners
         #in this framework "points" are self.weights
         #will also need to store CG-direction, which will be in dictionary conj_grad_dir
@@ -1067,30 +1075,19 @@ class NN_Trainer(Neural_Network):
                 ########## perform conjugate gradient on the batch ########################
                 failed_line_search = False
                 conj_grad_dir = -self.calculate_gradient(batch_inputs, batch_labels) #steepest descent for first direction
-                #if epoch_num < 5: #zeroing out all but last layer, only update last layer
-                #    for layer_num in range(1,self.model.num_layers):
-                #        weight_cur_layer = ''.join([str(layer_num-1), str(layer_num)])
-                #        bias_cur_layer = str(layer_num)
-                #        conj_grad_dir.weights[weight_cur_layer] *= 0
-                #        conj_grad_dir.bias[bias_cur_layer] *= 0
                 old_gradient = copy.deepcopy(conj_grad_dir)
                 new_gradient = copy.deepcopy(conj_grad_dir)
                 init_step_size = step_size * init_step_num / (conj_grad_dir.norm(excluded_keys) ** 2)
+                
                 for _ in range(self.conjugate_max_iterations):
                     step_size = self.line_search(batch_inputs, batch_labels, conj_grad_dir, max_line_searches=self.num_line_searches, 
-                                                 init_step_size=init_step_size)
+                                                 init_step_size=init_step_size, max_step_size=3.0, verbose=False)
                     if step_size > 0: #line search did not fail
                         #update weights if successful
                         self.model += conj_grad_dir * step_size
                         failed_line_search = False
                         #update search direction
                         new_gradient = self.calculate_gradient(batch_inputs, batch_labels)
-                #        if epoch_num < 5: #zeroing out all but last layer, only update last layer
-                #            for layer_num in range(1,self.model.num_layers):
-                #                weight_cur_layer = ''.join([str(layer_num-1), str(layer_num)])
-                #                bias_cur_layer = str(layer_num)
-                #                new_gradient.weights[weight_cur_layer] *= 0
-                #                new_gradient.bias[bias_cur_layer] *= 0
                         init_step_num = abs(old_gradient.dot(conj_grad_dir,excluded_keys)) #since we know conj_grad_dir is a descent dir
                         conj_grad_dir = self.calculate_conjugate_gradient_direction(batch_inputs, batch_labels, old_gradient, new_gradient, 
                                                                                     conj_grad_dir, const_type=self.conjugate_const_type)
@@ -1112,19 +1109,9 @@ class NN_Trainer(Neural_Network):
                         sys.stdout.write("\rline search failed...\r"), sys.stdout.flush()
                         failed_line_search = True
                         conj_grad_dir = -self.calculate_gradient(batch_inputs, batch_labels)
-                #        if epoch_num < 5: #zeroing out all but last layer, only update last layer
-                #            for layer_num in range(1,self.model.num_layers):
-                #                weight_cur_layer = ''.join([str(layer_num-1), str(layer_num)])
-                #                bias_cur_layer = str(layer_num)
-                #                conj_grad_dir.weights[weight_cur_layer] *= 0
-                #                conj_grad_dir.bias[bias_cur_layer] *= 0
                         init_step_size = 0.0
                         old_gradient = conj_grad_dir
                 ###########end conjugate gradient batch ####################################
-                
-                #batch_targets = self.forward_pass(batch_inputs, verbose=False)
-                #cross_entropy += self.calculate_cross_entropy(batch_targets, batch_labels)
-                #num_corr_classified += int(self.calculate_classification_accuracy(batch_targets, batch_labels) * batch_size)
                 batch_index += self.backprop_batch_size
             sys.stdout.write("\r100.0% done \r")
             print "number of failed line search in this epoch is", line_search_failures
@@ -1137,7 +1124,196 @@ class NN_Trainer(Neural_Network):
             print "number correctly classified is", num_correct, "of", num_examples
             
             if self.save_each_epoch:
-                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))       
+                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
+    def backprop_truncated_newton(self):
+        print "Starting backprop using truncated newton"
+        print "Number of layers is", self.model.num_layers
+        
+        cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+        print "cross-entropy before truncated newton is", cross_entropy
+        if self.l2_regularization_const > 0.0:
+            print "regularized loss is", loss
+        print "number correctly classified is", num_correct, "of", num_examples
+        
+        excluded_keys = {'bias':['0'], 'weights':[]} 
+        damping_factor = self.truncated_newton_init_damping_factor
+        preconditioner = None
+        model_update = None
+        for epoch_num in range(self.num_epochs):
+            print "Epoch", epoch_num+1, "of", self.num_epochs
+            batch_index = 0
+            end_index = 0
+            
+            while end_index < self.num_training_examples: #run through the batches
+                per_done = float(batch_index)/self.num_training_examples*100
+                sys.stdout.write("\r                                                                \r") #clear line
+                sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
+                sys.stdout.write("\r                                                                \r") #clear line
+                sys.stdout.write("\rdamping factor is %.1f\r" % damping_factor), sys.stdout.flush()
+                end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
+                batch_inputs = self.features[batch_index:end_index]
+                batch_labels = self.labels[batch_index:end_index]
+                batch_size = batch_inputs.shape[0]
+                
+                sys.stdout.write("\r                                                                \r") #clear line
+                sys.stdout.write("\rcalculating gradient\r"), sys.stdout.flush()
+                gradient = self.calculate_gradient(batch_inputs, batch_labels, check_gradient=False, model=self.model)
+                
+                old_loss = self.calculate_loss(batch_inputs, batch_labels, model=self.model) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
+                
+                if self.use_fisher_preconditioner:
+                    sys.stdout.write("\r                                                                \r")
+                    sys.stdout.write("calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
+                    
+                    preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model, l2_regularization_const = 0.0)
+                    # add regularization
+                    #preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
+                    preconditioner = (preconditioner + self.l2_regularization_const + damping_factor) ** (3./4.)
+                    preconditioner = preconditioner.clip(preconditioner.max(excluded_keys) * self.fisher_preconditioner_floor_val, float("Inf"))
+                model_update, model_vals = self.conjugate_gradient(batch_inputs, batch_labels, self.truncated_newton_num_cg_epochs, model=self.model, 
+                                                                   damping_factor=damping_factor, preconditioner=preconditioner, gradient=gradient, 
+                                                                   second_order_type=self.second_order_matrix, init_search_direction=model_update,
+                                                                   verbose = False)
+                model_den = model_vals[-1] #- model_vals[0]
+                
+                self.model += model_update
+                new_loss = self.calculate_loss(batch_inputs, batch_labels, model=self.model)  #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
+                model_num = (new_loss - old_loss) / batch_size
+                sys.stdout.write("\r                                                                      \r") #clear line
+                print "model ratio is", model_num / model_den,
+                if model_num / model_den < 0.25:
+                    damping_factor *= 1.5
+                elif model_num / model_den > 0.75:
+                    damping_factor *= 2./3.
+                batch_index += self.backprop_batch_size
+            sys.stdout.write("\r100.0% done \r")
+            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+            print "cross-entropy at the end of the epoch is", cross_entropy
+            if self.l2_regularization_const > 0.0:
+                print "regularized loss is", loss
+            print "number correctly classified is", num_correct, "of", num_examples
+            if self.save_each_epoch:
+                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
+    def backprop_krylov_subspace(self):
+        #does backprop using krylov subspace
+        excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
+        print "Starting backprop using krylov subspace descent"
+        print "Number of layers is", self.model.num_layers
+        
+        cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+        print "cross-entropy before krylov subspace is", cross_entropy
+        if self.l2_regularization_const > 0.0:
+            print "regularized loss is", loss
+        print "number correctly classified is", num_correct, "of", num_examples
+        
+        prev_direction = Neural_Network_Weight(self.model.num_layers) #copy.deepcopy(self.model) * 0
+        #print self.model.get_architecture()
+        prev_direction.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True)
+        prev_direction.bias['0'][0][0] = 1
+        sub_batch_start_perc = 0.0
+        preconditioner = None
+        for epoch_num in range(self.num_epochs):
+            print "Epoch", epoch_num + 1, "of", self.num_epochs
+            batch_index = 0
+            end_index = 0
+            while end_index < self.num_training_examples: #run through the batches
+                #per_done = float(batch_index)/self.num_training_examples*100
+                #sys.stdout.write("\r%.1f%% done" % per_done), sys.stdout.flush()
+                end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
+                batch_size = end_index - batch_index 
+                batch_inputs = self.features[batch_index:end_index] #:batch_index+1]
+                batch_labels = self.labels[batch_index:end_index] #:batch_index+1]
+                krylov_start_index = int(sub_batch_start_perc * batch_size)
+                bfgs_start_index = int((sub_batch_start_perc + 1.0 / self.krylov_num_batch_splits) * batch_size)
+                bfgs_end_index = int((sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) * batch_size)
+                krylov_index = [batch_index + x % batch_size for x in range(krylov_start_index, bfgs_start_index)] #[batch_index]
+                bfgs_index = [batch_index + x % batch_size for x in range(bfgs_start_index, bfgs_end_index)]
+                #print "krylov_index:", krylov_index
+                #print "bfgs_index:", bfgs_index
+                #print "krylov_start_index:", krylov_start_index, "bfgs_start_index:", bfgs_start_index, "bfgs_end_index", bfgs_end_index
+                sys.stdout.write("\r                                                                \r") #clear line
+                sys.stdout.write("part 1/3: calculating gradient"), sys.stdout.flush()
+                average_gradient = self.calculate_gradient(batch_inputs, batch_labels, False, self.model)
+                
+                #average_gradient.print_statistics()
+                #need to fix the what indices the batches are taken from... will always be the same subset
+                
+                #average_gradient = self.calculate_gradient(krylov_batch_inputs, krylov_batch_labels, self.model) / (batch_size / self.krylov_num_batch_splits)
+                if self.use_fisher_preconditioner:
+                    sys.stdout.write("\r                                                                \r")
+                    sys.stdout.write("part 1/3: calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
+                    preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model)
+                    #precon = (grad2 + mones(psize,1)*conv(lambda) + maskp*conv(weightcost)).^(3/4);
+                    # add regularization
+                    #preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
+                    preconditioner = (preconditioner + self.l2_regularization_const) ** (3./4.)
+                    preconditioner = preconditioner.clip(preconditioner.max(excluded_keys) * self.fisher_preconditioner_floor_val, float("Inf"))
+                    #preconditioner.print_statistics()
+                    #sys.exit()
+                krylov_batch_inputs = self.features[krylov_index]
+                krylov_batch_labels = self.labels[krylov_index]
+                sys.stdout.write("\r                                                                \r")
+                sys.stdout.write("part 2/3: calculating krylov basis"), sys.stdout.flush()
+                krylov_basis = self.calculate_krylov_basis(krylov_batch_inputs, krylov_batch_labels, prev_direction, average_gradient, self.model, preconditioner) #, preconditioner = average_gradient ** 2)
+                if self.krylov_use_hessian_preconditioner:
+                    U,singular_values,V = numpy.linalg.svd(krylov_basis['hessian'])
+                    numpy.clip(singular_values, numpy.max(singular_values) * self.krylov_eigenvalue_floor_const, float("Inf"), out=singular_values)
+                    projection_matrix = numpy.dot(U, numpy.diag(1. / numpy.sqrt(singular_values)))
+                    krylov_basis_copy = {}
+                    for idx in range(self.krylov_num_directions+1):
+                        krylov_basis_copy[idx] = krylov_basis[0] * projection_matrix[0][idx]
+                        
+                    for krylov_idx in range(0,self.krylov_num_directions+1):
+                        for projection_idx in range(1,self.krylov_num_directions+1):
+                            krylov_basis_copy[krylov_idx] += krylov_basis[projection_idx] * projection_matrix[projection_idx][krylov_idx]
+                    del krylov_basis
+                    krylov_basis = krylov_basis_copy
+                    #eigenvalues, eigenvectors = numpy.linalg.eig(krylov_basis['hessian'])
+                    #eigenvalues = numpy.abs(eigenvalues)
+                    #numpy.clip(eigenvalues, numpy.max(eigenvalues) * self.krylov_eigenvalue_floor_const, float("Inf"), out=eigenvalues)
+                    #inv_hessian_cond = numpy.dot(numpy.dot(eigenvectors, numpy.diag(1./eigenvalues)),numpy.transpose(eigenvectors))
+                    #inv_chol_factor = sl.cholesky(inv_hessian_cond) #numpy version gives lower triangular, scipy gives ut
+                    #for basis_num in range(self.krylov_num_directions+1):
+                    #    krylov_basis[basis_num] *= inv_chol_factor[basis_num][basis_num]
+                    #    for basis_mix_idx in range(basis_num+1,self.krylov_num_directions+1):
+                    #        krylov_basis[basis_num] += krylov_basis[basis_mix_idx] * inv_chol_factor[basis_num][basis_mix_idx]
+                #some_grad = numpy.zeros(len(krylov_basis.keys())-1) #-1 for 'hessian' key
+                #print some_grad
+                #print some_grad.shape[0]
+                #for dim in range(some_grad.shape[0]):
+                #    some_grad[dim] = average_gradient.dot(krylov_basis[dim], excluded_keys) #check to see if GN matrix is PSD
+                #print some_grad
+                #sys.exit()
+                bfgs_batch_inputs = self.features[bfgs_index]
+                bfgs_batch_labels = self.labels[bfgs_index]
+                sys.stdout.write("\r                                                                \r")
+                sys.stdout.write("part 3/3: calculating mix of krylov basis using bfgs"), sys.stdout.flush()
+                #step_size = sopt.fmin_bfgs(f=self.calculate_subspace_cross_entropy, x0=numpy.zeros(self.krylov_num_directions+1), 
+                #                           fprime=self.calculate_subspace_gradient, args=(krylov_basis, bfgs_batch_inputs, bfgs_batch_labels, self.model), 
+                #                           gtol=1E-5, norm=2, maxiter=self.krylov_num_bfgs_epochs)
+                step_size = self.bfgs(bfgs_batch_inputs, bfgs_batch_labels, krylov_basis, self.krylov_num_bfgs_epochs)
+                #print "returned step size is", step_size
+                direction = krylov_basis[0] * step_size[0]
+                for basis in range(1,len(step_size)):
+                    direction += krylov_basis[basis] * step_size[basis]
+                #print "printing direction statistics"
+                #direction.print_statistics()
+                #print "printing model statistics"
+                #self.model.print_statistics()
+                self.model += direction
+                prev_direction = copy.deepcopy(direction)
+                direction.clear()
+            #sub_batch_start_perc = (sub_batch_start_perc + 1.0 / self.krylov_num_batch_splits) % 1 #not sure if this is better, below line is what I used to get krylov results
+            sub_batch_start_perc = (sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) % 1
+            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+            print "cross-entropy at the end of the epoch is", cross_entropy
+            if self.l2_regularization_const > 0.0:
+                print "regularized loss is", loss
+            print "number correctly classified is", num_correct, "of", num_examples
+            if self.save_each_epoch:
+                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)])) 
+                
     def calculate_conjugate_gradient_direction(self, batch_inputs, batch_labels, old_gradient, new_gradient, #needs preconditioners, expensive, should be compiled
                                                current_conjugate_gradient_direction, const_type='polak-ribiere'):
         excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
@@ -1378,12 +1554,14 @@ class NN_Trainer(Neural_Network):
             step_size = max_step_size / 2
         else:
             step_size = init_step_size
+        
         prev_step_size = 0
         prev_loss = zero_step_loss
         prev_directional_derivative = zero_step_directional_derivative
         (upper_bracket, upper_bracket_loss, upper_bracket_deriv, lower_bracket, lower_bracket_loss, lower_bracket_deriv) = [0 for _ in range(6)]
         
         for num_line_searches in range(1,max_line_searches+1): #looking for brackets
+            if verbose: print "proposed step size is", step_size
             try:
                 proposed_loss = self.calculate_loss(batch_inputs, batch_labels, model = model + direction * step_size) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False,
                                                                                                                         #model = model + direction * step_size), batch_labels)
@@ -1422,6 +1600,7 @@ class NN_Trainer(Neural_Network):
                 lower_bracket_deriv = prev_directional_derivative
                 break
             else: #satisfies Armijo rule, but not 2nd Wolfe condition, so go out further
+                if verbose: print "satisfies Armijo rule, but not 2nd Wolfe condition, so go out further"
                 prev_step_size = step_size
                 prev_loss = proposed_loss
                 prev_directional_derivative = proposed_directional_derivative
@@ -1477,126 +1656,6 @@ class NN_Trainer(Neural_Network):
             return p1[0] - p1[2] / (2 * b)
         else: #bisect
             return (p1[0] + p2[0]) / 2
-    def backprop_krylov_subspace(self):
-        #does backprop using krylov subspace
-        excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
-        print "Starting backprop using krylov subspace descent"
-        print "Number of layers is", self.model.num_layers
-        
-        cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
-        print "cross-entropy before krylov subspace is", cross_entropy
-        if self.l2_regularization_const > 0.0:
-            print "regularized loss is", loss
-        print "number correctly classified is", num_correct, "of", num_examples
-        
-        prev_direction = Neural_Network_Weight(self.model.num_layers) #copy.deepcopy(self.model) * 0
-        #print self.model.get_architecture()
-        prev_direction.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True)
-        prev_direction.bias['0'][0][0] = 1
-        sub_batch_start_perc = 0.0
-        preconditioner = None
-        for epoch_num in range(self.num_epochs):
-            print "Epoch", epoch_num + 1, "of", self.num_epochs
-            batch_index = 0
-            end_index = 0
-            while end_index < self.num_training_examples: #run through the batches
-                #per_done = float(batch_index)/self.num_training_examples*100
-                #sys.stdout.write("\r%.1f%% done" % per_done), sys.stdout.flush()
-                end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
-                batch_size = end_index - batch_index 
-                batch_inputs = self.features[batch_index:end_index] #:batch_index+1]
-                batch_labels = self.labels[batch_index:end_index] #:batch_index+1]
-                krylov_start_index = int(sub_batch_start_perc * batch_size)
-                bfgs_start_index = int((sub_batch_start_perc + 1.0 / self.krylov_num_batch_splits) * batch_size)
-                bfgs_end_index = int((sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) * batch_size)
-                krylov_index = [batch_index + x % batch_size for x in range(krylov_start_index, bfgs_start_index)] #[batch_index]
-                bfgs_index = [batch_index + x % batch_size for x in range(bfgs_start_index, bfgs_end_index)]
-                #print "krylov_index:", krylov_index
-                #print "bfgs_index:", bfgs_index
-                #print "krylov_start_index:", krylov_start_index, "bfgs_start_index:", bfgs_start_index, "bfgs_end_index", bfgs_end_index
-                sys.stdout.write("\r                                                                \r") #clear line
-                sys.stdout.write("part 1/3: calculating gradient"), sys.stdout.flush()
-                average_gradient = self.calculate_gradient(batch_inputs, batch_labels, False, self.model)
-                
-                #average_gradient.print_statistics()
-                #need to fix the what indices the batches are taken from... will always be the same subset
-                
-                #average_gradient = self.calculate_gradient(krylov_batch_inputs, krylov_batch_labels, self.model) / (batch_size / self.krylov_num_batch_splits)
-                if self.use_fisher_preconditioner:
-                    sys.stdout.write("\r                                                                \r")
-                    sys.stdout.write("part 1/3: calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
-                    preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model)
-                    #precon = (grad2 + mones(psize,1)*conv(lambda) + maskp*conv(weightcost)).^(3/4);
-                    # add regularization
-                    #preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
-                    preconditioner = (preconditioner + self.l2_regularization_const) ** (3./4.)
-                    
-                    #preconditioner = preconditioner.clip(preconditioner.max(excluded_keys) * 1E-4, float("Inf"), excluded_keys)
-                    #preconditioner.print_statistics()
-                    #sys.exit()
-                krylov_batch_inputs = self.features[krylov_index]
-                krylov_batch_labels = self.labels[krylov_index]
-                sys.stdout.write("\r                                                                \r")
-                sys.stdout.write("part 2/3: calculating krylov basis"), sys.stdout.flush()
-                krylov_basis = self.calculate_krylov_basis(krylov_batch_inputs, krylov_batch_labels, prev_direction, average_gradient, self.model, preconditioner) #, preconditioner = average_gradient ** 2)
-                if self.krylov_use_hessian_preconditioner:
-                    U,singular_values,V = numpy.linalg.svd(krylov_basis['hessian'])
-                    numpy.clip(singular_values, numpy.max(singular_values) * self.krylov_eigenvalue_floor_const, float("Inf"), out=singular_values)
-                    projection_matrix = numpy.dot(U, numpy.diag(1. / numpy.sqrt(singular_values)))
-                    krylov_basis_copy = {}
-                    for idx in range(self.krylov_num_directions+1):
-                        krylov_basis_copy[idx] = krylov_basis[0] * projection_matrix[0][idx]
-                        
-                    for krylov_idx in range(0,self.krylov_num_directions+1):
-                        for projection_idx in range(1,self.krylov_num_directions+1):
-                            krylov_basis_copy[krylov_idx] += krylov_basis[projection_idx] * projection_matrix[projection_idx][krylov_idx]
-                    del krylov_basis
-                    krylov_basis = krylov_basis_copy
-                    #eigenvalues, eigenvectors = numpy.linalg.eig(krylov_basis['hessian'])
-                    #eigenvalues = numpy.abs(eigenvalues)
-                    #numpy.clip(eigenvalues, numpy.max(eigenvalues) * self.krylov_eigenvalue_floor_const, float("Inf"), out=eigenvalues)
-                    #inv_hessian_cond = numpy.dot(numpy.dot(eigenvectors, numpy.diag(1./eigenvalues)),numpy.transpose(eigenvectors))
-                    #inv_chol_factor = sl.cholesky(inv_hessian_cond) #numpy version gives lower triangular, scipy gives ut
-                    #for basis_num in range(self.krylov_num_directions+1):
-                    #    krylov_basis[basis_num] *= inv_chol_factor[basis_num][basis_num]
-                    #    for basis_mix_idx in range(basis_num+1,self.krylov_num_directions+1):
-                    #        krylov_basis[basis_num] += krylov_basis[basis_mix_idx] * inv_chol_factor[basis_num][basis_mix_idx]
-                #some_grad = numpy.zeros(len(krylov_basis.keys())-1) #-1 for 'hessian' key
-                #print some_grad
-                #print some_grad.shape[0]
-                #for dim in range(some_grad.shape[0]):
-                #    some_grad[dim] = average_gradient.dot(krylov_basis[dim], excluded_keys) #check to see if GN matrix is PSD
-                #print some_grad
-                #sys.exit()
-                bfgs_batch_inputs = self.features[bfgs_index]
-                bfgs_batch_labels = self.labels[bfgs_index]
-                sys.stdout.write("\r                                                                \r")
-                sys.stdout.write("part 3/3: calculating mix of krylov basis using bfgs"), sys.stdout.flush()
-                #step_size = sopt.fmin_bfgs(f=self.calculate_subspace_cross_entropy, x0=numpy.zeros(self.krylov_num_directions+1), 
-                #                           fprime=self.calculate_subspace_gradient, args=(krylov_basis, bfgs_batch_inputs, bfgs_batch_labels, self.model), 
-                #                           gtol=1E-5, norm=2, maxiter=self.krylov_num_bfgs_epochs)
-                step_size = self.bfgs(bfgs_batch_inputs, bfgs_batch_labels, krylov_basis, self.krylov_num_bfgs_epochs)
-                #print "returned step size is", step_size
-                direction = krylov_basis[0] * step_size[0]
-                for basis in range(1,len(step_size)):
-                    direction += krylov_basis[basis] * step_size[basis]
-                #print "printing direction statistics"
-                #direction.print_statistics()
-                #print "printing model statistics"
-                #self.model.print_statistics()
-                self.model += direction
-                prev_direction = copy.deepcopy(direction)
-                direction.clear()
-            #sub_batch_start_perc = (sub_batch_start_perc + 1.0 / self.krylov_num_batch_splits) % 1 #not sure if this is better, below line is what I used to get krylov results
-            sub_batch_start_perc = (sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) % 1
-            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
-            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
-            print "cross-entropy at the end of the epoch is", cross_entropy
-            if self.l2_regularization_const > 0.0:
-                print "regularized loss is", loss
-            print "number correctly classified is", num_correct, "of", num_examples
-            if self.save_each_epoch:
-                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)])) 
     def calculate_krylov_basis(self, batch_inputs, batch_labels, prev_direction, gradient = None, model = None, preconditioner = None): #need to test
         if model == None:
             model = self.model
@@ -2038,76 +2097,6 @@ class NN_Trainer(Neural_Network):
                 print "condition number of bfgs matrix is too high:", condition_number, "so returning current step\r"
                 return cur_step
         return cur_step
-    def backprop_truncated_newton(self):
-        print "Starting backprop using truncated newton"
-        print "Number of layers is", self.model.num_layers
-        
-        cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
-        print "cross-entropy before truncated newton is", cross_entropy
-        if self.l2_regularization_const > 0.0:
-            print "regularized loss is", loss
-        print "number correctly classified is", num_correct, "of", num_examples
-        
-        excluded_keys = {'bias':['0'], 'weights':[]} 
-        damping_factor = self.truncated_newton_init_damping_factor
-        preconditioner = None
-        model_update = None
-        for epoch_num in range(self.num_epochs):
-            print "Epoch", epoch_num+1, "of", self.num_epochs
-            batch_index = 0
-            end_index = 0
-            
-            while end_index < self.num_training_examples: #run through the batches
-                per_done = float(batch_index)/self.num_training_examples*100
-                sys.stdout.write("\r                                                                \r") #clear line
-                sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
-                sys.stdout.write("\r                                                                \r") #clear line
-                sys.stdout.write("\rdamping factor is %.1f\r" % damping_factor), sys.stdout.flush()
-                end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
-                batch_inputs = self.features[batch_index:end_index]
-                batch_labels = self.labels[batch_index:end_index]
-                batch_size = batch_inputs.shape[0]
-                
-                sys.stdout.write("\r                                                                \r") #clear line
-                sys.stdout.write("\rcalculating gradient\r"), sys.stdout.flush()
-                gradient = self.calculate_gradient(batch_inputs, batch_labels, check_gradient=False, model=self.model)
-                
-                old_loss = self.calculate_loss(batch_inputs, batch_labels, model=self.model) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
-                
-                if self.use_fisher_preconditioner:
-                    sys.stdout.write("\r                                                                \r")
-                    sys.stdout.write("calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
-                    
-                    alpha = 1E-5
-                    preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model)
-                    # add regularization
-                    preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
-                    preconditioner = (preconditioner + self.l2_regularization_const) ** (3./4.)
-                
-                model_update, model_vals = self.conjugate_gradient(batch_inputs, batch_labels, self.truncated_newton_num_cg_epochs, model=self.model, 
-                                                                   damping_factor=damping_factor, preconditioner=preconditioner, gradient=gradient, 
-                                                                   second_order_type=self.second_order_matrix, init_search_direction=model_update,
-                                                                   verbose = False)
-                model_den = model_vals[-1] #- model_vals[0]
-                
-                self.model += model_update
-                new_loss = self.calculate_loss(batch_inputs, batch_labels, model=self.model)  #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
-                model_num = (new_loss - old_loss) / batch_size
-                sys.stdout.write("\r                                                                      \r") #clear line
-                print "model ratio is", model_num / model_den,
-                if model_num / model_den < 0.25:
-                    damping_factor *= 1.5
-                elif model_num / model_den > 0.75:
-                    damping_factor *= 2./3.
-                batch_index += self.backprop_batch_size
-            sys.stdout.write("\r100.0% done \r")
-            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
-            print "cross-entropy at the end of the epoch is", cross_entropy
-            if self.l2_regularization_const > 0.0:
-                print "regularized loss is", loss
-            print "number correctly classified is", num_correct, "of", num_examples
-            if self.save_each_epoch:
-                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
                  
     def conjugate_gradient(self, batch_inputs, batch_labels, num_epochs, model = None, damping_factor = 0.0, #seems to be correct, compare with conjugate_gradient.py
                            verbose = False, preconditioner = None, gradient = None, second_order_type='gauss-newton', 

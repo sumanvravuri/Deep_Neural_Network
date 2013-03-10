@@ -11,52 +11,53 @@ Deep Neural Network with arbitrary number of hidden layers with these features:
 * Early Stopping
 * CUDA speedup
 
-Oct 11, 2012 fixed error in backprop_steepest_descent
 '''
 
 import sys
-import numpy
+import numpy as np
 import scipy.io as sp
 import scipy.linalg as sl
 import scipy.optimize as sopt
 import math
 import copy
+import argparse
 
 class Vector_Math:
     #math functions
     def sigmoid(self,inputs): #completed, expensive, should be compiled
-        return 1./(1+numpy.exp(-inputs)) #1/(1+e^-X)
+        return 1./(1+np.exp(-inputs)) #1/(1+e^-X)
     def softmax(self, inputs): #completed, expensive, should be compiled
         #subtracting max value of each data point below for numerical stability
-        exp_inputs = numpy.exp(inputs - numpy.transpose(numpy.tile(numpy.max(inputs,axis=1), (inputs.shape[1],1))))
-        return exp_inputs / numpy.transpose(numpy.tile(numpy.sum(exp_inputs, axis=1), (exp_inputs.shape[1],1)))
+        #exp_inputs = np.exp(inputs - np.transpose(np.tile(np.max(inputs,axis=1), (inputs.shape[1],1))))
+        exp_inputs = np.exp(inputs - np.max(inputs,axis=1)[:,np.newaxis])
+        return exp_inputs / np.sum(exp_inputs, axis=1)[:, np.newaxis]
     def weight_matrix_multiply(self,inputs,weights,biases): #completed, expensive, should be compiled
         #print "input dims are ", inputs.shape
         #print "weight dims are ", weights.shape
         #print "bias dims are ", biases.shape
-        return numpy.dot(inputs,weights)+numpy.tile(biases, (inputs.shape[0],1))
-        #return numpy.dot(inputs,weights) + biases[:,numpy.newaxis]
+        #return np.dot(inputs,weights)+np.tile(biases, (inputs.shape[0],1))
+        return np.dot(inputs,weights) + biases#[np.newaxis, :]
 class Neural_Network_Weight(object):
     def __init__(self, num_layers=0, weights=None, bias=None, weight_type=None):
         #num_layers
         #weights - actual Neural Network weights, a dictionary with keys corresponding to layer, ie. weights['01'], weights['12'], etc. each numpy array
         #bias - NN biases, again a dictionary stored as bias['0'], bias['1'], bias['2'], etc.
         #weight_type - optional command indexed by same keys weights, possible optionals are 'rbm_gaussian_bernoullli', 'rbm_bernoulli_bernoulli', 'logistic', 'convolutional', or 'pooling'
-        self.valid_layer_types = {}
+        self.valid_layer_types = dict()
         self.valid_layer_types['all'] = ['rbm_gaussian_bernoulli', 'rbm_bernoulli_bernoulli', 'logistic', 'convolutional', 'pooling']
         self.valid_layer_types['intermediate'] = ['rbm_gaussian_bernoulli', 'rbm_bernoulli_bernoulli', 'convolutional', 'pooling']
         self.valid_layer_types['last'] = ['rbm_gaussian_bernoulli', 'rbm_bernoulli_bernoulli', 'logistic']
         self.num_layers = num_layers
         if weights == None:
-            self.weights = {}
+            self.weights = dict()
         else:
             self.weights = copy.deepcopy(weights)
         if bias == None:
-            self.bias = {}
+            self.bias = dict()
         else:
             self.bias = copy.deepcopy(bias)
         if weight_type == None:
-            self.weight_type = {}
+            self.weight_type = dict()
         else:
             self.weight_type = copy.deepcopy(weight_type)
     def clear(self):
@@ -72,66 +73,66 @@ class Neural_Network_Weight(object):
         for key in self.bias.keys():
             if key in excluded_keys['bias']:
                 continue
-            return_val += numpy.sum(self.bias[key] * nn_weight2.bias[key])
+            return_val += np.sum(self.bias[key] * nn_weight2.bias[key])
         for key in self.weights.keys():
             if key in excluded_keys['weights']:
                 continue
-            return_val += numpy.sum(self.weights[key] * nn_weight2.weights[key])
+            return_val += np.sum(self.weights[key] * nn_weight2.weights[key])
         return return_val
     def print_statistics(self):
         for key in self.bias.keys():
-            print "min of bias[", key, "] is", numpy.min(self.bias[key]) 
-            print "max of bias[", key, "] is", numpy.max(self.bias[key])
-            print "mean of bias[", key, "] is", numpy.mean(self.bias[key])
-            print "var of bias[", key, "] is", numpy.var(self.bias[key]), "\n"
+            print "min of bias[", key, "] is", np.min(self.bias[key]) 
+            print "max of bias[", key, "] is", np.max(self.bias[key])
+            print "mean of bias[", key, "] is", np.mean(self.bias[key])
+            print "var of bias[", key, "] is", np.var(self.bias[key]), "\n"
         for key in self.weights.keys():
-            print "min of weights[", key, "] is", numpy.min(self.weights[key]) 
-            print "max of weights[", key, "] is", numpy.max(self.weights[key])
-            print "mean of weights[", key, "] is", numpy.mean(self.weights[key])
-            print "var of weights[", key, "] is", numpy.var(self.weights[key]), "\n"
+            print "min of weights[", key, "] is", np.min(self.weights[key]) 
+            print "max of weights[", key, "] is", np.max(self.weights[key])
+            print "mean of weights[", key, "] is", np.mean(self.weights[key])
+            print "var of weights[", key, "] is", np.var(self.weights[key]), "\n"
     def norm(self, excluded_keys = {'bias': [], 'weights': []}):
         squared_sum = 0
         for key in self.bias.keys():
             if key in excluded_keys['bias']:
                 continue
-            squared_sum += numpy.sum(self.bias[key] ** 2)
+            squared_sum += np.sum(self.bias[key] ** 2)
         for key in self.weights.keys():
             if key in excluded_keys['weights']:
                 continue  
-            squared_sum += numpy.sum(self.weights[key] ** 2)
-        return numpy.sqrt(squared_sum)
+            squared_sum += np.sum(self.weights[key] ** 2)
+        return np.sqrt(squared_sum)
     def max(self, excluded_keys = {'bias': [], 'weights': []}):
         max_val = -float('Inf')
         for key in self.bias.keys():
             if key in excluded_keys['bias']:
                 continue
-            max_val = max(numpy.max(self.bias[key]), max_val)
+            max_val = max(np.max(self.bias[key]), max_val)
         for key in self.weights.keys():
             if key in excluded_keys['weights']:
                 continue  
-            max_val = max(numpy.max(self.weights[key]), max_val)
+            max_val = max(np.max(self.weights[key]), max_val)
         return max_val
     def min(self, excluded_keys = {'bias': [], 'weights': []}):
         min_val = float('Inf')
         for key in self.bias.keys():
             if key in excluded_keys['bias']:
                 continue
-            min_val = min(numpy.min(self.bias[key]), min_val)
+            min_val = min(np.min(self.bias[key]), min_val)
         for key in self.weights.keys():
             if key in excluded_keys['weights']:
                 continue  
-            min_val = max(numpy.min(self.weights[key]), min_val)
+            min_val = max(np.min(self.weights[key]), min_val)
         return min_val
     def clip(self, clip_min, clip_max, excluded_keys = {'bias': [], 'weights': []}):
         nn_output = copy.deepcopy(self)
         for key in self.bias.keys():
             if key in excluded_keys['bias']:
                 continue
-            numpy.clip(self.bias[key], clip_min, clip_max, out=nn_output.bias[key])
+            np.clip(self.bias[key], clip_min, clip_max, out=nn_output.bias[key])
         for key in self.weights.keys():
             if key in excluded_keys['weights']:
                 continue  
-            numpy.clip(self.weights[key], clip_min, clip_max, out=nn_output.weights[key])
+            np.clip(self.weights[key], clip_min, clip_max, out=nn_output.weights[key])
         return nn_output
     def get_architecture(self):
         return [self.bias[str(layer_num)].size for layer_num in range(self.num_layers+1) ]
@@ -188,19 +189,19 @@ class Neural_Network_Weight(object):
         self.check_weights()
     def init_random_weights(self, architecture, initial_bias_max, initial_bias_min, initial_weight_min, 
                            initial_weight_max, last_layer_logistic=True, seed=0): #completed, expensive, should be compiled
-        numpy.random.seed(seed)
+        np.random.seed(seed)
         self.num_layers = len(architecture) - 1
         initial_bias_range = initial_bias_max - initial_bias_min
         initial_weight_range = initial_weight_max - initial_weight_min
-        self.bias['0'] = initial_bias_min + initial_bias_range * numpy.random.random_sample((1,architecture[0]))
+        self.bias['0'] = initial_bias_min + initial_bias_range * np.random.random_sample((1,architecture[0]))
         
         for layer_num in range(1,self.num_layers+1):
             weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
             bias_cur_layer = str(layer_num)
             #print "initializing weight layer", weight_cur_layer, "and bias layer", bias_cur_layer
-            self.bias[bias_cur_layer] = initial_bias_min + initial_bias_range * numpy.random.random_sample((1,architecture[layer_num]))
+            self.bias[bias_cur_layer] = initial_bias_min + initial_bias_range * np.random.random_sample((1,architecture[layer_num]))
             self.weights[weight_cur_layer]=(initial_weight_min + initial_weight_range * 
-                                            numpy.random.random_sample( (architecture[layer_num-1],architecture[layer_num]) ))
+                                            np.random.random_sample( (architecture[layer_num-1],architecture[layer_num]) ))
             if layer_num == 0:
                 self.weight_type[weight_cur_layer] = 'rbm_gaussian_bernoulli'
             elif layer_num == self.num_layers and last_layer_logistic == True:
@@ -212,14 +213,14 @@ class Neural_Network_Weight(object):
         self.check_weights()
     def init_zero_weights(self, architecture, last_layer_logistic=True, verbose=False):
         self.num_layers = len(architecture) - 1
-        self.bias['0'] = numpy.zeros((1,architecture[0]))
+        self.bias['0'] = np.zeros((1,architecture[0]))
         
         for layer_num in range(1,self.num_layers+1):
             weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
             bias_cur_layer = str(layer_num)
             #print "initializing weight layer", weight_cur_layer, "and bias layer", bias_cur_layer
-            self.bias[bias_cur_layer] = numpy.zeros((1,architecture[layer_num]))
-            self.weights[weight_cur_layer] = numpy.zeros( (architecture[layer_num-1],architecture[layer_num]) )
+            self.bias[bias_cur_layer] = np.zeros((1,architecture[layer_num]))
+            self.weights[weight_cur_layer] = np.zeros( (architecture[layer_num-1],architecture[layer_num]) )
             if layer_num == 0:
                 self.weight_type[weight_cur_layer] = 'rbm_gaussian_bernoulli'
             elif layer_num == self.num_layers and last_layer_logistic == True:
@@ -305,7 +306,7 @@ class Neural_Network_Weight(object):
         if verbose:
             print "seems copacetic"
     def write_weights(self, output_name): #completed
-        weight_dict = {}
+        weight_dict = dict()
         weight_dict['num_layers'] = self.num_layers
         weight_dict['bias0'] = self.bias['0']
         for layer_num in range(1, self.num_layers+1):
@@ -479,8 +480,8 @@ class Neural_Network(object, Vector_Math):
         self.model = Neural_Network_Weight()
         self.output_name = self.default_variable_define(config_dictionary, 'output_name', arg_type='string')
         
-        self.required_variables = {}
-        self.all_variables = {}
+        self.required_variables = dict()
+        self.all_variables = dict()
         self.required_variables['train'] = ['mode', 'feature_file_name', 'output_name']
         self.all_variables['train'] = self.required_variables['train'] + ['label_file_name', 'hiddens_structure', 'weight_matrix_name', 
                                'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 'save_each_epoch',
@@ -581,7 +582,7 @@ class Neural_Network(object, Vector_Math):
                     output_list.append(float(elem))
         return output_list
     def levenshtein_string_edit_distance(self, string1, string2): #completed
-        dist = {}
+        dist = dict()
         string1_len = len(string1)
         string2_len = len(string2)
         
@@ -630,8 +631,8 @@ class Neural_Network(object, Vector_Math):
                 if var in self.all_variables[incorrect_mode]:
                     print "but", var, "is a valid key for", incorrect_mode, "so either the mode or key is incorrect"
                 else:
-                    string_distances = numpy.array([self.levenshtein_string_edit_distance(var, string2) for string2 in self.all_variables[correct_mode]])
-                    print "perhaps you meant ***", self.all_variables[correct_mode][numpy.argmin(string_distances)], "\b*** (levenshtein string edit distance", numpy.min(string_distances), "\b) instead of ***", var, "\b***?"
+                    string_distances = np.array([self.levenshtein_string_edit_distance(var, string2) for string2 in self.all_variables[correct_mode]])
+                    print "perhaps you meant ***", self.all_variables[correct_mode][np.argmin(string_distances)], "\b*** (levenshtein string edit distance", np.min(string_distances), "\b) instead of ***", var, "\b***?"
                 if exit_flag == False:
                     print "Because of above error, will exit after checking rest of keys"
                     exit_flag = True
@@ -649,10 +650,10 @@ class Neural_Network(object, Vector_Math):
         if self.labels.size != self.features.shape[0]:
             print "Number of examples in feature file: ", self.features.shape[0], " does not equal size of label file, ", self.labels.size, "... Exiting now"
             sys.exit()
-        if  [i for i in numpy.unique(self.labels)] != range(numpy.max(self.labels)+1):
+        if  [i for i in np.unique(self.labels)] != range(np.max(self.labels)+1):
             print "Labels need to be in the form 0,1,2,....,n,... Exiting now"
             sys.exit()
-        label_counts = numpy.bincount(numpy.ravel(self.labels)) #[self.labels.count(x) for x in range(numpy.max(self.labels)+1)]
+        label_counts = np.bincount(np.ravel(self.labels)) #[self.labels.count(x) for x in range(np.max(self.labels)+1)]
         print "distribution of labels is:"
         for x in range(len(label_counts)):
             print "#", x, "\b's:", label_counts[x]            
@@ -701,7 +702,7 @@ class Neural_Network(object, Vector_Math):
                                            model.bias[bias_cur_layer], model.weight_type[weight_cur_layer])
         return cur_layer
     def calculate_cross_entropy(self, output, labels): #completed, expensive, should be compiled
-        return -numpy.sum(numpy.log([max(output.item((x,labels[x])),1E-12) for x in range(labels.size)]))
+        return -np.sum(np.log([max(output.item((x,labels[x])),1E-12) for x in range(labels.size)]))
     def calculate_classification_accuracy(self, output, labels): #completed, possibly expensive
         prediction = output.argmax(axis=1).reshape(labels.shape)
         classification_accuracy = sum(prediction == labels) / float(labels.size)
@@ -778,7 +779,7 @@ class NN_Trainer(Neural_Network):
         # this will run logistic regression using steepest descent, which is a bad idea"""
         
         #Raise error if we encounter under/overflow during training, because this is bad... code should handle this gracefully
-        old_settings = numpy.seterr(over='raise',under='raise',invalid='raise')
+        old_settings = np.seterr(over='raise',under='raise',invalid='raise')
         
         self.mode = 'train'
         super(NN_Trainer,self).__init__(config_dictionary)
@@ -804,7 +805,7 @@ class NN_Trainer(Neural_Network):
             self.hiddens_structure = self.default_variable_define(config_dictionary, 'hiddens_structure', arg_type='int_comma_string', exit_if_no_default=True)
             architecture = [self.features.shape[1]] + self.hiddens_structure
             if hasattr(self, 'labels'):
-                architecture.append(numpy.max(self.labels)+1) #will have to change later if I have soft weights
+                architecture.append(np.max(self.labels)+1) #will have to change later if I have soft weights
                 
             self.initial_weight_max = self.default_variable_define(config_dictionary, 'initial_weight_max', arg_type='float', default_value=0.1)
             self.initial_weight_min = self.default_variable_define(config_dictionary, 'initial_weight_min', arg_type='float', default_value=-0.1)
@@ -846,7 +847,7 @@ class NN_Trainer(Neural_Network):
                 print "No labels found... cannot do backprop... Exiting now"
                 sys.exit()
             self.backprop_method = self.default_variable_define(config_dictionary, 'backprop_method', default_value='steepest_descent', 
-                                                                acceptable_values=['steepest_descent', 'conjugate_gradient', 'krylov_subspace'])
+                                                                acceptable_values=['steepest_descent', 'conjugate_gradient', 'krylov_subspace', 'truncated_newton'])
             self.backprop_batch_size = self.default_variable_define(config_dictionary, 'backprop_batch_size', default_value=2048, arg_type='int')
             self.l2_regularization_const = self.default_variable_define(config_dictionary, 'l2_regularization_const', arg_type='float', default_value=0.0, exit_if_no_default=False)
             
@@ -922,9 +923,9 @@ class NN_Trainer(Neural_Network):
     #pretraining functions
     def backward_layer(self, hiddens, weights, biases, weight_type): #completed, transpose expensive, should be compiled
         if weight_type == 'rbm_gaussian_bernoulli':
-            return self.weight_matrix_multiply(hiddens, numpy.transpose(weights), biases)
+            return self.weight_matrix_multiply(hiddens, np.transpose(weights), biases)
         else: #rbm_type is bernoulli
-            return self.sigmoid(self.weight_matrix_multiply(hiddens, numpy.transpose(weights), biases))
+            return self.sigmoid(self.weight_matrix_multiply(hiddens, np.transpose(weights), biases))
     def pretrain(self): #completed, weight updates expensive, should be compiled
         print "starting pretraining"
         learning_rate_index = 0;
@@ -956,14 +957,14 @@ class NN_Trainer(Neural_Network):
                     reconstruction_hiddens = self.forward_layer(reconstruction, self.model.weights[weight_cur_layer], self.model.bias[bias_cur_layer], self.model.weight_type[weight_cur_layer]) #ndata x nhid
                 
                     #update weights
-                    weight_update =  numpy.dot(numpy.transpose(reconstruction),reconstruction_hiddens) - numpy.dot(numpy.transpose(inputs),hiddens) # inputs: [batch_size * n_dim], hiddens: [batch_size * n_hids]
-                    vis_bias_update =  numpy.sum(reconstruction, axis=0) - numpy.sum(inputs, axis=0)
-                    hid_bias_update =  numpy.sum(reconstruction_hiddens, axis=0) - numpy.sum(hiddens, axis=0)
+                    weight_update =  np.dot(np.transpose(reconstruction),reconstruction_hiddens) - np.dot(np.transpose(inputs),hiddens) # inputs: [batch_size * n_dim], hiddens: [batch_size * n_hids]
+                    vis_bias_update =  np.sum(reconstruction, axis=0) - np.sum(inputs, axis=0)
+                    hid_bias_update =  np.sum(reconstruction_hiddens, axis=0) - np.sum(hiddens, axis=0)
                     self.model.weights[weight_cur_layer] -= self.pretrain_learning_rate[learning_rate_index] / batch_size * weight_update
                     self.model.bias[bias_prev_layer] -= self.pretrain_learning_rate[learning_rate_index] / batch_size * vis_bias_update
                     self.model.bias[bias_cur_layer] -= self.pretrain_learning_rate[learning_rate_index] / batch_size * hid_bias_update
                     
-                    reconstruction_error += numpy.sum((inputs - reconstruction) * (inputs - reconstruction))
+                    reconstruction_error += np.sum((inputs - reconstruction) * (inputs - reconstruction))
                     batch_index += self.pretrain_batch_size
                 sys.stdout.write("\r100.0% done \r")
                 print "squared reconstuction error is", reconstruction_error
@@ -977,7 +978,7 @@ class NN_Trainer(Neural_Network):
         #returns hidden values for each layer, needed for steepest descent and conjugate gradient methods
         if model == None:
             model = self.model
-        hiddens = {}
+        hiddens = dict()
         hiddens[0] = inputs
         for layer_num in range(1,model.num_layers+1): #will need for steepest descent for first direction
             weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
@@ -1012,7 +1013,7 @@ class NN_Trainer(Neural_Network):
                     weight_vec[data_index, self.labels[label_index]] += 1
                 #averaging batches
                 bias_update = sum(weight_vec)
-                weight_update = numpy.dot(numpy.transpose(hiddens[self.model.num_layers-1]), weight_vec)
+                weight_update = np.dot(np.transpose(hiddens[self.model.num_layers-1]), weight_vec)
                 #I don't use calculate_gradient because structure allows me to store only one layer of weights
                 
                 for layer_num in range(self.model.num_layers-1,0,-1):
@@ -1020,12 +1021,12 @@ class NN_Trainer(Neural_Network):
                     weight_next_layer = ''.join([str(layer_num),str(layer_num+1)])
                     bias_cur_layer = str(layer_num)
                     bias_next_layer = str(layer_num+1)
-                    weight_vec = numpy.dot(weight_vec, numpy.transpose(self.model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out), do the biases get involved in this calculation???
+                    weight_vec = np.dot(weight_vec, np.transpose(self.model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out), do the biases get involved in this calculation???
                     
                     self.model.weights[weight_next_layer] += self.steepest_learning_rate[epoch_num] / batch_size * (weight_update - self.l2_regularization_const * self.model.weights[weight_next_layer])
                     self.model.bias[bias_next_layer][0] += self.steepest_learning_rate[epoch_num] / batch_size * (bias_update - self.l2_regularization_const * self.model.bias[bias_next_layer][0])
                     bias_update = sum(weight_vec)
-                    weight_update = numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
+                    weight_update = np.dot(np.transpose(hiddens[layer_num-1]), weight_vec)
                     
                 #do final weight_update
                 self.model.weights[weight_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * (weight_update - self.l2_regularization_const * self.model.weights[weight_cur_layer])
@@ -1256,10 +1257,10 @@ class NN_Trainer(Neural_Network):
                 sys.stdout.write("part 2/3: calculating krylov basis"), sys.stdout.flush()
                 krylov_basis = self.calculate_krylov_basis(krylov_batch_inputs, krylov_batch_labels, prev_direction, average_gradient, self.model, preconditioner) #, preconditioner = average_gradient ** 2)
                 if self.krylov_use_hessian_preconditioner:
-                    U,singular_values,V = numpy.linalg.svd(krylov_basis['hessian'])
-                    numpy.clip(singular_values, numpy.max(singular_values) * self.krylov_eigenvalue_floor_const, float("Inf"), out=singular_values)
-                    projection_matrix = numpy.dot(U, numpy.diag(1. / numpy.sqrt(singular_values)))
-                    krylov_basis_copy = {}
+                    U,singular_values,V = np.linalg.svd(krylov_basis['hessian'])
+                    np.clip(singular_values, np.max(singular_values) * self.krylov_eigenvalue_floor_const, float("Inf"), out=singular_values)
+                    projection_matrix = np.dot(U, np.diag(1. / np.sqrt(singular_values)))
+                    krylov_basis_copy = dict()
                     for idx in range(self.krylov_num_directions+1):
                         krylov_basis_copy[idx] = krylov_basis[0] * projection_matrix[0][idx]
                         
@@ -1268,16 +1269,16 @@ class NN_Trainer(Neural_Network):
                             krylov_basis_copy[krylov_idx] += krylov_basis[projection_idx] * projection_matrix[projection_idx][krylov_idx]
                     del krylov_basis
                     krylov_basis = krylov_basis_copy
-                    #eigenvalues, eigenvectors = numpy.linalg.eig(krylov_basis['hessian'])
-                    #eigenvalues = numpy.abs(eigenvalues)
-                    #numpy.clip(eigenvalues, numpy.max(eigenvalues) * self.krylov_eigenvalue_floor_const, float("Inf"), out=eigenvalues)
-                    #inv_hessian_cond = numpy.dot(numpy.dot(eigenvectors, numpy.diag(1./eigenvalues)),numpy.transpose(eigenvectors))
+                    #eigenvalues, eigenvectors = np.linalg.eig(krylov_basis['hessian'])
+                    #eigenvalues = np.abs(eigenvalues)
+                    #np.clip(eigenvalues, np.max(eigenvalues) * self.krylov_eigenvalue_floor_const, float("Inf"), out=eigenvalues)
+                    #inv_hessian_cond = np.dot(np.dot(eigenvectors, np.diag(1./eigenvalues)),np.transpose(eigenvectors))
                     #inv_chol_factor = sl.cholesky(inv_hessian_cond) #numpy version gives lower triangular, scipy gives ut
                     #for basis_num in range(self.krylov_num_directions+1):
                     #    krylov_basis[basis_num] *= inv_chol_factor[basis_num][basis_num]
                     #    for basis_mix_idx in range(basis_num+1,self.krylov_num_directions+1):
                     #        krylov_basis[basis_num] += krylov_basis[basis_mix_idx] * inv_chol_factor[basis_num][basis_mix_idx]
-                #some_grad = numpy.zeros(len(krylov_basis.keys())-1) #-1 for 'hessian' key
+                #some_grad = np.zeros(len(krylov_basis.keys())-1) #-1 for 'hessian' key
                 #print some_grad
                 #print some_grad.shape[0]
                 #for dim in range(some_grad.shape[0]):
@@ -1288,7 +1289,7 @@ class NN_Trainer(Neural_Network):
                 bfgs_batch_labels = self.labels[bfgs_index]
                 sys.stdout.write("\r                                                                \r")
                 sys.stdout.write("part 3/3: calculating mix of krylov basis using bfgs"), sys.stdout.flush()
-                #step_size = sopt.fmin_bfgs(f=self.calculate_subspace_cross_entropy, x0=numpy.zeros(self.krylov_num_directions+1), 
+                #step_size = sopt.fmin_bfgs(f=self.calculate_subspace_cross_entropy, x0=np.zeros(self.krylov_num_directions+1), 
                 #                           fprime=self.calculate_subspace_gradient, args=(krylov_basis, bfgs_batch_inputs, bfgs_batch_labels, self.model), 
                 #                           gtol=1E-5, norm=2, maxiter=self.krylov_num_bfgs_epochs)
                 step_size = self.bfgs(bfgs_batch_inputs, bfgs_batch_labels, krylov_basis, self.krylov_num_bfgs_epochs)
@@ -1306,7 +1307,7 @@ class NN_Trainer(Neural_Network):
             #sub_batch_start_perc = (sub_batch_start_perc + 1.0 / self.krylov_num_batch_splits) % 1 #not sure if this is better, below line is what I used to get krylov results
             sub_batch_start_perc = (sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) % 1
             cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
-            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+            
             print "cross-entropy at the end of the epoch is", cross_entropy
             if self.l2_regularization_const > 0.0:
                 print "regularized loss is", loss
@@ -1429,15 +1430,15 @@ class NN_Trainer(Neural_Network):
         bias_cur_layer = str(model.num_layers)
         output_model.bias[bias_cur_layer][0] = sum(weight_vec**2)
         
-        output_model.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[model.num_layers-1]**2), weight_vec**2)
+        output_model.weights[weight_cur_layer] = np.dot(np.transpose(hiddens[model.num_layers-1]**2), weight_vec**2)
         #propagate to sigmoid layers
         for layer_num in range(model.num_layers-1,0,-1):
             weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
             weight_next_layer = ''.join([str(layer_num),str(layer_num+1)])
             bias_cur_layer = str(layer_num)
-            weight_vec = numpy.dot(weight_vec, numpy.transpose(model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out)
+            weight_vec = np.dot(weight_vec, np.transpose(model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out)
             output_model.bias[bias_cur_layer][0] = sum(weight_vec**2) #this is somewhat ugly
-            output_model.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[layer_num-1]**2), weight_vec**2)
+            output_model.weights[weight_cur_layer] = np.dot(np.transpose(hiddens[layer_num-1]**2), weight_vec**2)
         
         if not check_gradient:
             if l2_regularization_const > 0.0:
@@ -1504,15 +1505,15 @@ class NN_Trainer(Neural_Network):
         weight_cur_layer = ''.join([str(model.num_layers-1), str(model.num_layers)])
         bias_cur_layer = str(model.num_layers)
         output_model.bias[bias_cur_layer][0] = sum(weight_vec)
-        output_model.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[model.num_layers-1]), weight_vec)
+        output_model.weights[weight_cur_layer] = np.dot(np.transpose(hiddens[model.num_layers-1]), weight_vec)
         #propagate to sigmoid layers
         for layer_num in range(model.num_layers-1,0,-1):
             weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
             weight_next_layer = ''.join([str(layer_num),str(layer_num+1)])
             bias_cur_layer = str(layer_num)
-            weight_vec = numpy.dot(weight_vec, numpy.transpose(model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out)
+            weight_vec = np.dot(weight_vec, np.transpose(model.weights[weight_next_layer])) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out)
             output_model.bias[bias_cur_layer][0] = sum(weight_vec) #this is somewhat ugly
-            output_model.weights[weight_cur_layer] = numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec)
+            output_model.weights[weight_cur_layer] = np.dot(np.transpose(hiddens[layer_num-1]), weight_vec)
         return output_model
     def line_search(self, batch_inputs, batch_labels, direction, max_step_size=0.1, #completed, way expensive, should be compiled
                     max_line_searches=20, init_step_size=0.0, model = None, verbose=False): 
@@ -1614,7 +1615,7 @@ class NN_Trainer(Neural_Network):
             if verbose: print "upper bracket:", upper_bracket, "lower bracket:", lower_bracket
             step_size = self.interpolate_step_size((upper_bracket, upper_bracket_loss, upper_bracket_deriv),
                                                     (lower_bracket, lower_bracket_loss, lower_bracket_deriv))
-            mix_const = numpy.abs((step_size - lower_bracket) / (upper_bracket - lower_bracket))
+            mix_const = np.abs((step_size - lower_bracket) / (upper_bracket - lower_bracket))
             if mix_const < 0.05 or mix_const > 0.95:
                 step_size = (upper_bracket + lower_bracket) / 2
             if verbose: print "proposed step size is", step_size
@@ -1651,7 +1652,7 @@ class NN_Trainer(Neural_Network):
         b = (3 * (p2[1] - p1[1]) - (2 * p1[2] + p2[2])*(p2[0] - p1[0])) / (p2[0] - p1[0])**2
         a = (-2 * (p2[1] - p1[1]) + (p1[2] + p2[2])*(p2[0] - p1[0])) / (p2[0] - p1[0])**3
         if b**2 > 3 * a * p1[2]: #cubic interp
-            return p1[0] + (-b + numpy.sqrt(b**2 - 3 * a * p1[2])) / (3 * a)
+            return p1[0] + (-b + np.sqrt(b**2 - 3 * a * p1[2])) / (3 * a)
         elif b != 0: #quadratic interp
             return p1[0] - p1[2] / (2 * b)
         else: #bisect
@@ -1660,9 +1661,9 @@ class NN_Trainer(Neural_Network):
         if model == None:
             model = self.model
         batch_size = batch_inputs.shape[0]
-        krylov_basis = {} #dictionary of weights, "directions" are weights
+        krylov_basis = dict() #dictionary of weights, "directions" are weights
         excluded_keys = {'bias': ['0'], 'weights': []}
-        krylov_basis['hessian'] = numpy.identity(self.krylov_num_directions+1)
+        krylov_basis['hessian'] = np.identity(self.krylov_num_directions+1)
         #will need to add preconditioning at some point
         hiddens = self.forward_first_order_methods(batch_inputs, model)
         if gradient == None:
@@ -1734,7 +1735,7 @@ class NN_Trainer(Neural_Network):
             weight_vec = hiddens[model.num_layers] 
             for index in range(batch_size):
                 weight_vec[index, labels[index]] -= 1 
-            weight_vec *= hidden_deriv[model.num_layers+1][:, numpy.newaxis]
+            weight_vec *= hidden_deriv[model.num_layers+1][:, np.newaxis]
             second_order_direction = self.backward_pass(weight_vec, hiddens, model) 
         else:
             print second_order_type, "is not a valid type. Acceptable types are gauss-newton, hessian, and fisher... Exiting now..."
@@ -1761,29 +1762,29 @@ class NN_Trainer(Neural_Network):
                 finite_diff_forward = self.forward_pass_linear(inputs, verbose=False, model = model + direction * epsilon)
                 finite_diff_backward = self.forward_pass_linear(inputs, verbose=False, model = model - direction * epsilon)
                 finite_diff_jacobian_vec = (finite_diff_forward - finite_diff_backward) / (2 * epsilon)
-                finite_diff_HJv = numpy.zeros(finite_diff_jacobian_vec.shape)
+                finite_diff_HJv = np.zeros(finite_diff_jacobian_vec.shape)
                 
                 num_outputs = len(linear_out[0])
-                collapsed_hessian = numpy.zeros((num_outputs,num_outputs))
+                collapsed_hessian = np.zeros((num_outputs,num_outputs))
                 for batch_index in range(batch_size):
                     #calculate collapsed Hessian
-                    direction1 = numpy.zeros(finite_diff_forward[0].shape)
-                    direction2 = numpy.zeros(finite_diff_forward[0].shape)
+                    direction1 = np.zeros(finite_diff_forward[0].shape)
+                    direction2 = np.zeros(finite_diff_forward[0].shape)
                     for index1 in range(len(finite_diff_forward[0])):
                         for index2 in range(len(finite_diff_forward[0])):
                             direction1[index1] = epsilon
                             direction2[index2] = epsilon
-                            loss_plus_plus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] + direction1 + direction2])), labels[batch_index:batch_index+1])
-                            loss_plus_minus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] + direction1 - direction2])), labels[batch_index:batch_index+1])
-                            loss_minus_plus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] - direction1 + direction2])), labels[batch_index:batch_index+1])
-                            loss_minus_minus = self.calculate_cross_entropy(self.softmax(numpy.array([linear_out[batch_index] - direction1 - direction2])), labels[batch_index:batch_index+1])
+                            loss_plus_plus = self.calculate_cross_entropy(self.softmax(np.array([linear_out[batch_index] + direction1 + direction2])), labels[batch_index:batch_index+1])
+                            loss_plus_minus = self.calculate_cross_entropy(self.softmax(np.array([linear_out[batch_index] + direction1 - direction2])), labels[batch_index:batch_index+1])
+                            loss_minus_plus = self.calculate_cross_entropy(self.softmax(np.array([linear_out[batch_index] - direction1 + direction2])), labels[batch_index:batch_index+1])
+                            loss_minus_minus = self.calculate_cross_entropy(self.softmax(np.array([linear_out[batch_index] - direction1 - direction2])), labels[batch_index:batch_index+1])
                             collapsed_hessian[index1,index2] = (loss_plus_plus + loss_minus_minus - loss_minus_plus - loss_plus_minus) / (4 * epsilon * epsilon)
                             direction1[index1] = 0.0
                             direction2[index2] = 0.0
                     print collapsed_hessian
                     out = self.softmax(linear_out[batch_index:batch_index+1])
-                    print numpy.diag(out[0]) - numpy.outer(out[0], out[0])
-                    finite_diff_HJv[batch_index] += numpy.dot(collapsed_hessian, finite_diff_jacobian_vec[batch_index])
+                    print np.diag(out[0]) - np.outer(out[0], out[0])
+                    finite_diff_HJv[batch_index] += np.dot(collapsed_hessian, finite_diff_jacobian_vec[batch_index])
                     
                 for batch_index in range(batch_size):
                     #calculate J'd = J'HJv
@@ -1796,7 +1797,7 @@ class NN_Trainer(Neural_Network):
                             #print direction.norm()
                             forward_loss = self.forward_pass_linear(inputs[batch_index:batch_index+1], verbose=False, model = model + update)
                             backward_loss = self.forward_pass_linear(inputs[batch_index:batch_index+1], verbose=False, model = model - update)
-                            finite_difference_model.bias[key][0][index] += numpy.dot((forward_loss - backward_loss) / (2 * epsilon), finite_diff_HJv[batch_index])
+                            finite_difference_model.bias[key][0][index] += np.dot((forward_loss - backward_loss) / (2 * epsilon), finite_diff_HJv[batch_index])
                             update.bias[key][0][index] = 0.0
                     for key in direction.weights.keys():
                         print "at weight key", key
@@ -1805,7 +1806,7 @@ class NN_Trainer(Neural_Network):
                                 update.weights[key][index0][index1] = epsilon
                                 forward_loss = self.forward_pass_linear(inputs[batch_index:batch_index+1], verbose=False, model= model + update)
                                 backward_loss = self.forward_pass_linear(inputs[batch_index:batch_index+1], verbose=False, model= model - update)
-                                finite_difference_model.weights[key][index0][index1] += numpy.dot((forward_loss - backward_loss) / (2 * epsilon), finite_diff_HJv[batch_index])
+                                finite_difference_model.weights[key][index0][index1] += np.dot((forward_loss - backward_loss) / (2 * epsilon), finite_diff_HJv[batch_index])
                                 update.weights[key][index0][index1] = 0.0
             elif second_order_type == 'hessian':
                 sys.stdout.write("\r                                                                \r")
@@ -1870,7 +1871,7 @@ class NN_Trainer(Neural_Network):
         if self.do_backprop == False:
             classification_batch_size = 4096
         else:
-            classification_batch_size = self.backprop_batch_size
+            classification_batch_size = max(self.backprop_batch_size, 4096)
         
         batch_index = 0
         end_index = 0
@@ -1884,7 +1885,7 @@ class NN_Trainer(Neural_Network):
             
             #don't use calculate_classification_accuracy() because of possible rounding error
             prediction = output.argmax(axis=1).reshape(labels[batch_index:end_index].shape)
-            num_correct += numpy.sum(prediction == labels[batch_index:end_index])
+            num_correct += np.sum(prediction == labels[batch_index:end_index])
             batch_index += classification_batch_size
         
         loss = cross_entropy
@@ -1899,14 +1900,14 @@ class NN_Trainer(Neural_Network):
         stop_at is either 'linear', 'output', or 'loss' """
         
         batch_size = len(labels)
-        hidden_deriv = {}
+        hidden_deriv = dict()
         hidden_deriv[1] = self.weight_matrix_multiply(hiddens[0], direction.weights['01'], direction.bias['1']) * hiddens[1] * (1-hiddens[1])
         for layer_num in range(1,model.num_layers-1):
             weight_cur_layer = ''.join([str(layer_num), str(layer_num+1)])
             bias_cur_layer = str(layer_num+1)
             hidden_deriv[layer_num+1] = ((self.weight_matrix_multiply(hiddens[layer_num], direction.weights[weight_cur_layer], 
                                                                       direction.bias[bias_cur_layer]) +
-                                          numpy.dot(hidden_deriv[layer_num], model.weights[weight_cur_layer])) *
+                                          np.dot(hidden_deriv[layer_num], model.weights[weight_cur_layer])) *
                                           hiddens[layer_num+1] * (1-hiddens[layer_num+1]) )
         #update last layer, assuming logistic regression
         
@@ -1914,13 +1915,13 @@ class NN_Trainer(Neural_Network):
         bias_cur_layer = str(model.num_layers)
         linear_layer = (self.weight_matrix_multiply(hiddens[model.num_layers-1], direction.weights[weight_cur_layer], 
                                                     direction.bias[bias_cur_layer]) +
-                        numpy.dot(hidden_deriv[model.num_layers-1], model.weights[weight_cur_layer]))
+                        np.dot(hidden_deriv[model.num_layers-1], model.weights[weight_cur_layer]))
         if stop_at == 'linear':
             hidden_deriv[model.num_layers] = linear_layer
         else:
-            hidden_deriv[model.num_layers] = linear_layer * hiddens[model.num_layers] - hiddens[model.num_layers] * numpy.sum(linear_layer * hiddens[model.num_layers], axis=1)[:,numpy.newaxis]
+            hidden_deriv[model.num_layers] = linear_layer * hiddens[model.num_layers] - hiddens[model.num_layers] * np.sum(linear_layer * hiddens[model.num_layers], axis=1)[:,np.newaxis]
         if stop_at == 'loss':
-            hidden_deriv[model.num_layers+1] = -numpy.array([(hidden_deriv[model.num_layers][index, labels[index]] / hiddens[model.num_layers][index, labels[index]])[0] for index in range(batch_size)])
+            hidden_deriv[model.num_layers+1] = -np.array([(hidden_deriv[model.num_layers][index, labels[index]] / hiddens[model.num_layers][index, labels[index]])[0] for index in range(batch_size)])
             
         if not check_gradient:
             return hidden_deriv
@@ -1937,8 +1938,8 @@ class NN_Trainer(Neural_Network):
                 finite_diff_backward = self.forward_pass(hiddens[0], verbose=False, model = model - direction * epsilon)
             elif stop_at == 'loss':
                 calculated = hidden_deriv[model.num_layers + 1]
-                finite_diff_forward = -numpy.log([max(self.forward_pass(hiddens[0], verbose=False, model = model + direction * epsilon).item((x,labels[x])),1E-12) for x in range(labels.size)]) 
-                finite_diff_backward =  -numpy.log([max(self.forward_pass(hiddens[0], verbose=False, model = model - direction * epsilon).item((x,labels[x])),1E-12) for x in range(labels.size)]) 
+                finite_diff_forward = -np.log([max(self.forward_pass(hiddens[0], verbose=False, model = model + direction * epsilon).item((x,labels[x])),1E-12) for x in range(labels.size)]) 
+                finite_diff_backward =  -np.log([max(self.forward_pass(hiddens[0], verbose=False, model = model - direction * epsilon).item((x,labels[x])),1E-12) for x in range(labels.size)]) 
             print "pearlmutter calculation"
             print calculated
             print "finite differences approximation, epsilon", epsilon
@@ -1951,7 +1952,7 @@ class NN_Trainer(Neural_Network):
             model = self.model
         output_model = Neural_Network_Weight(num_layers=model.num_layers)
         output_model.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
-        hidden_deriv[0] = numpy.zeros(hiddens[0].shape)
+        hidden_deriv[0] = np.zeros(hiddens[0].shape)
         #derivative of log(cross-entropy softmax)
         weight_vec = hiddens[model.num_layers] #batchsize x n_outputs
         batch_size = len(batch_labels)
@@ -1963,8 +1964,8 @@ class NN_Trainer(Neural_Network):
         weight_cur_layer = ''.join([str(model.num_layers-1), str(model.num_layers)])
         bias_cur_layer = str(model.num_layers)
         output_model.bias[bias_cur_layer][0] = sum(weight_vec_deriv)
-        output_model.weights[weight_cur_layer] = (numpy.dot(numpy.transpose(hiddens[model.num_layers-1]), weight_vec_deriv) +
-                                                  numpy.dot(numpy.transpose(hidden_deriv[model.num_layers-1]), weight_vec))
+        output_model.weights[weight_cur_layer] = (np.dot(np.transpose(hiddens[model.num_layers-1]), weight_vec_deriv) +
+                                                  np.dot(np.transpose(hidden_deriv[model.num_layers-1]), weight_vec))
         #propagate to sigmoid layers
         for layer_num in range(model.num_layers-1,0,-1):
             weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
@@ -1973,13 +1974,13 @@ class NN_Trainer(Neural_Network):
             d_hidden = hiddens[layer_num] * (1-hiddens[layer_num]) #derivative of sigmoid
             d2_hidden_div_d_hidden = (1. - 2. * hiddens[layer_num])
             old_weight_vec = weight_vec
-            weight_vec = numpy.dot(weight_vec, numpy.transpose(model.weights[weight_next_layer])) * d_hidden
+            weight_vec = np.dot(weight_vec, np.transpose(model.weights[weight_next_layer])) * d_hidden
             weight_vec_deriv = (weight_vec * d2_hidden_div_d_hidden * hidden_deriv[layer_num] + 
-                                (numpy.dot(old_weight_vec, numpy.transpose(direction.weights[weight_next_layer])) +
-                                 numpy.dot(weight_vec_deriv, numpy.transpose(model.weights[weight_next_layer]))) * d_hidden)
+                                (np.dot(old_weight_vec, np.transpose(direction.weights[weight_next_layer])) +
+                                 np.dot(weight_vec_deriv, np.transpose(model.weights[weight_next_layer]))) * d_hidden)
             output_model.bias[bias_cur_layer][0] = sum(weight_vec_deriv) #this is somewhat ugly
-            output_model.weights[weight_cur_layer] = (numpy.dot(numpy.transpose(hiddens[layer_num-1]), weight_vec_deriv) +
-                                                      numpy.dot(numpy.transpose(hidden_deriv[layer_num-1]), weight_vec))
+            output_model.weights[weight_cur_layer] = (np.dot(np.transpose(hiddens[layer_num-1]), weight_vec_deriv) +
+                                                      np.dot(np.transpose(hidden_deriv[layer_num-1]), weight_vec))
         
         return output_model
     def calculate_subspace_cross_entropy(self, parameters, basis, inputs, labels, model = None):
@@ -1998,7 +1999,7 @@ class NN_Trainer(Neural_Network):
         if model == None:
             model = self.model
         excluded_keys = {'bias': ['0'], 'weights': []}
-        subspace_gradient = numpy.zeros(parameters.shape)
+        subspace_gradient = np.zeros(parameters.shape)
         num_directions = len(parameters)
         batch_size = inputs.shape[0]
         
@@ -2025,15 +2026,15 @@ class NN_Trainer(Neural_Network):
             print "number correctly classified is", classification_stats[1], "of", classification_stats[2]
         
         num_directions = self.krylov_num_directions + 1
-        identity_mat = numpy.identity(num_directions)
+        identity_mat = np.identity(num_directions)
             
-        cur_step = numpy.zeros(num_directions)
-        subspace_prev_gradient = numpy.zeros(num_directions)
+        cur_step = np.zeros(num_directions)
+        subspace_prev_gradient = np.zeros(num_directions)
         #finite_diff_approx = copy.deepcopy(cur_step)
-        bfgs_mat = numpy.identity(num_directions)
+        bfgs_mat = np.identity(num_directions)
         
         init_step_size = 1.0
-        subspace_cur_gradient = self.calculate_subspace_gradient(numpy.zeros(num_directions), basis, batch_inputs, batch_labels, model)
+        subspace_cur_gradient = self.calculate_subspace_gradient(np.zeros(num_directions), basis, batch_inputs, batch_labels, model)
         #for dim in range(num_directions):
         #    subspace_cur_gradient[dim] = model_gradient.dot(basis[dim], excluded_keys)
             #finite_diff_approx[dim] = ((self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=model + basis[dim] * 0.0005), batch_labels) 
@@ -2049,12 +2050,12 @@ class NN_Trainer(Neural_Network):
         for epoch in range(num_epochs):
             print "\r                                                                \r", #clear line
             sys.stdout.write("\rbfgs epoch %d of %d\r" % (epoch+1, num_epochs)), sys.stdout.flush()
-            #print "norm of the subspace gradient is", numpy.linalg.norm(subspace_cur_gradient)
+            #print "norm of the subspace gradient is", np.linalg.norm(subspace_cur_gradient)
             #print "bfgs matrix is"
             #print bfgs_mat
             #print "current gradient is"
             #print cur_gradient
-            subspace_direction = -numpy.dot(bfgs_mat, subspace_cur_gradient)
+            subspace_direction = -np.dot(bfgs_mat, subspace_cur_gradient)
             #print "provisional mix is", provisional_mix
             model_direction = basis[0] * subspace_direction[0]
             for dim in range(1, num_directions):
@@ -2085,12 +2086,12 @@ class NN_Trainer(Neural_Network):
             
             step_condition = cur_step - prev_step
             grad_condition = subspace_cur_gradient - subspace_prev_gradient
-            curvature_condition = numpy.dot(step_condition, grad_condition)
+            curvature_condition = np.dot(step_condition, grad_condition)
             #print "curvature condition is", curvature_condition
-            bfgs_mat = (numpy.dot((identity_mat - numpy.outer(step_condition, grad_condition) / curvature_condition), 
-                                  numpy.dot(bfgs_mat, (identity_mat - numpy.outer(grad_condition, step_condition) / curvature_condition)))
-                                  + numpy.outer(step_condition, step_condition) / curvature_condition)
-            U,s,V = numpy.linalg.svd(bfgs_mat)
+            bfgs_mat = (np.dot((identity_mat - np.outer(step_condition, grad_condition) / curvature_condition), 
+                                  np.dot(bfgs_mat, (identity_mat - np.outer(grad_condition, step_condition) / curvature_condition)))
+                                  + np.outer(step_condition, step_condition) / curvature_condition)
+            U,s,V = np.linalg.svd(bfgs_mat)
             #print "singular values of bfgs matrix are", s
             condition_number = max(s) / min(s)
             if condition_number > 30000.0:
@@ -2111,7 +2112,7 @@ class NN_Trainer(Neural_Network):
         tolerance = 5E-4
         gap_ratio = 0.1
         min_gap = 10
-        #max_test_gap = int(numpy.max([numpy.ceil(gap_ratio * num_epochs), min_gap]) + 1)
+        #max_test_gap = int(np.max([np.ceil(gap_ratio * num_epochs), min_gap]) + 1)
         model_vals = list()
         
         model_update = Neural_Network_Weight(num_layers=model.num_layers)
@@ -2169,7 +2170,7 @@ class NN_Trainer(Neural_Network):
             model_vals.append(model_val)
             if verbose:
                 print "model val at end of epoch is", model_vals[-1]
-            test_gap = int(numpy.max([numpy.ceil(epoch * gap_ratio), min_gap]))
+            test_gap = int(np.max([np.ceil(epoch * gap_ratio), min_gap]))
             if epoch > test_gap: #checking termination condition
                 previous_model_val = model_vals[-test_gap]
                 if (previous_model_val - model_val) / model_val <= tolerance * test_gap and previous_model_val < 0:
@@ -2185,24 +2186,61 @@ class NN_Trainer(Neural_Network):
             search_direction = -preconditioned_residual + search_direction * conjugate_gradient_const
             residual_dot = new_residual_dot
         return model_update, model_vals
+
+def init_arg_parser():
+    required_variables = dict()
+    all_variables = dict()
+    required_variables['train'] = [ 'feature_file_name', 'output_name']
+    all_variables['train'] = required_variables['train'] + ['label_file_name', 'hiddens_structure', 'weight_matrix_name', 
+                               'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 'save_each_epoch',
+                               'do_pretrain', 'pretrain_method', 'pretrain_iterations', 
+                               'pretrain_learning_rate', 'pretrain_batch_size',
+                               'do_backprop', 'backprop_method', 'backprop_batch_size', 'l2_regularization_const',
+                               'num_epochs', 'num_line_searches', 'armijo_const', 'wolfe_const',
+                               'steepest_learning_rate',
+                               'conjugate_max_iterations', 'conjugate_const_type',
+                               'truncated_newton_num_cg_epochs', 'truncated_newton_init_damping_factor',
+                               'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix',
+                               'krylov_use_hessian_preconditioner', 'krylov_eigenvalue_floor_const', 
+                               'fisher_preconditioner_floor_val', 'use_fisher_preconditioner']
+    required_variables['test'] =  ['feature_file_name', 'weight_matrix_name', 'output_name']
+    all_variables['test'] =  required_variables['test'] + ['label_file_name']
     
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', help='mode for DNN, either train or test', required=False)
+    parser.add_argument('--config_file', help='configuration file to read in you do not want to input arguments via command line', required=False)
+    for argument in all_variables['train']:
+        parser.add_argument('--' + argument, required=False)
+    for argument in all_variables['test']:
+        if argument not in all_variables['train']:
+            parser.add_argument('--' + argument, required=False)
+    return parser
+
 if __name__ == '__main__':
-    script_name, config_filename = sys.argv
-    print "Opening config file: %s" % config_filename
+    #script_name, config_filename = sys.argv
+    #print "Opening config file: %s" % config_filename
+    script_name = sys.argv[0]
+    parser = init_arg_parser()
+    config_dictionary = vars(parser.parse_args())
     
-    try:
-        config_file=open(config_filename)
-    except IOError:
-        print "Could open file", config_filename, ". Usage is ", script_name, "<config file>... Exiting Now"
-        sys.exit()
+    if config_dictionary['config_file'] != None :
+        config_filename = config_dictionary['config_file']
+        print "Since", config_filename, "is specified, ignoring other arguments"
+        try:
+            config_file=open(config_filename)
+        except IOError:
+            print "Could open file", config_filename, ". Usage is ", script_name, "<config file>... Exiting Now"
+            sys.exit()
         
-    config_dictionary={}
-    
-    #read lines into a configuration dictionary
-    for line in config_file.readlines():
-        config_line=line.strip(' \n\t').split('=')
-        if len(config_line[0]) > 0 and config_line[0][0] != '#': #whitespace and # symbols ignored
-            config_dictionary[config_line[0]] = config_line[1]
+        del config_dictionary
+        
+        #read lines into a configuration dictionary, skipping lines that begin with #
+        config_dictionary = dict([line.replace(" ", "").strip(' \n\t').split('=') for line in config_file 
+                                  if not line.replace(" ", "").strip(' \n\t').startswith('#') and '=' in line])
+        config_file.close()
+    else:
+        #remove empty keys
+        config_dictionary = dict([(arg,value) for arg,value in config_dictionary.items() if value != None])
 
     try:
         mode=config_dictionary['mode']

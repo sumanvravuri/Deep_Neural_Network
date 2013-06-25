@@ -698,7 +698,7 @@ class Neural_Network(object, Vector_Math):
                                            model.bias[bias_cur_layer], 'linear')
         return cur_layer
     def forward_pass(self, inputs, verbose=True, model=None): #completed
-        # forward pass each layer starting with feature level
+        """forward pass each layer starting with feature level"""
         if model == None:
             model = self.model 
         cur_layer = inputs
@@ -1160,7 +1160,7 @@ class NN_Trainer(Neural_Network):
                 sys.stdout.write("\r                                                                \r") #clear line
                 sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
                 sys.stdout.write("\r                                                                \r") #clear line
-                sys.stdout.write("\rdamping factor is %.1f\r" % damping_factor), sys.stdout.flush()
+                sys.stdout.write("\rdamping factor is %f\r" % damping_factor), sys.stdout.flush()
                 end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
                 batch_inputs = self.features[batch_index:end_index]
                 batch_labels = self.labels[batch_index:end_index]
@@ -1197,12 +1197,15 @@ class NN_Trainer(Neural_Network):
                 elif model_num / model_den > 0.75:
                     damping_factor *= 2./3.
                 batch_index += self.backprop_batch_size
+                
+                cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+                print "cross-entropy at the end of the epoch is", cross_entropy
+                if self.l2_regularization_const > 0.0:
+                    print "regularized loss is", loss
+                print "number correctly classified is", num_correct, "of", num_examples
+                
             sys.stdout.write("\r100.0% done \r")
-            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
-            print "cross-entropy at the end of the epoch is", cross_entropy
-            if self.l2_regularization_const > 0.0:
-                print "regularized loss is", loss
-            print "number correctly classified is", num_correct, "of", num_examples
+            
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
     def backprop_krylov_subspace(self):
@@ -1261,34 +1264,34 @@ class NN_Trainer(Neural_Network):
                     preconditioner = preconditioner.clip(preconditioner.max(excluded_keys) * self.fisher_preconditioner_floor_val, float("Inf"))
                     #preconditioner.print_statistics()
                     #sys.exit()
-                krylov_batch_inputs = self.features[krylov_index]
+                krylov_batch_inputs = self.features[[krylov_index]]
                 krylov_batch_labels = self.labels[krylov_index]
                 sys.stdout.write("\r                                                                \r")
                 sys.stdout.write("part 2/3: calculating krylov basis"), sys.stdout.flush()
                 krylov_basis = self.calculate_krylov_basis(krylov_batch_inputs, krylov_batch_labels, prev_direction, average_gradient, self.model, preconditioner) #, preconditioner = average_gradient ** 2)
                 
                 if self.krylov_use_hessian_preconditioner:
-                    U,singular_values,V = np.linalg.svd(krylov_basis['hessian'])
-                    np.clip(singular_values, np.max(singular_values) * self.krylov_eigenvalue_floor_const, float("Inf"), out=singular_values)
-                    projection_matrix = np.dot(U, np.diag(1. / np.sqrt(singular_values)))
-                    krylov_basis_copy = dict()
-                    for idx in range(self.krylov_num_directions+1):
-                        krylov_basis_copy[idx] = krylov_basis[0] * projection_matrix[0][idx]
-                        
-                    for krylov_idx in range(0,self.krylov_num_directions+1):
-                        for projection_idx in range(1,self.krylov_num_directions+1):
-                            krylov_basis_copy[krylov_idx] += krylov_basis[projection_idx] * projection_matrix[projection_idx][krylov_idx]
-                    del krylov_basis
-                    krylov_basis = krylov_basis_copy
-                    #eigenvalues, eigenvectors = np.linalg.eig(krylov_basis['hessian'])
-                    #eigenvalues = np.abs(eigenvalues)
-                    #np.clip(eigenvalues, np.max(eigenvalues) * self.krylov_eigenvalue_floor_const, float("Inf"), out=eigenvalues)
-                    #inv_hessian_cond = np.dot(np.dot(eigenvectors, np.diag(1./eigenvalues)),np.transpose(eigenvectors))
-                    #inv_chol_factor = sl.cholesky(inv_hessian_cond) #numpy version gives lower triangular, scipy gives ut
-                    #for basis_num in range(self.krylov_num_directions+1):
-                    #    krylov_basis[basis_num] *= inv_chol_factor[basis_num][basis_num]
-                    #    for basis_mix_idx in range(basis_num+1,self.krylov_num_directions+1):
-                    #        krylov_basis[basis_num] += krylov_basis[basis_mix_idx] * inv_chol_factor[basis_num][basis_mix_idx]
+#                    U,singular_values,V = np.linalg.svd(krylov_basis['hessian'])
+#                    np.clip(singular_values, np.max(singular_values) * self.krylov_eigenvalue_floor_const, float("Inf"), out=singular_values)
+#                    projection_matrix = np.dot(U, np.diag(1. / np.sqrt(singular_values)))
+#                    krylov_basis_copy = dict()
+#                    for idx in range(self.krylov_num_directions+1):
+#                        krylov_basis_copy[idx] = krylov_basis[0] * projection_matrix[0][idx]
+#                        
+#                    for krylov_idx in range(0,self.krylov_num_directions+1):
+#                        for projection_idx in range(1,self.krylov_num_directions+1):
+#                            krylov_basis_copy[krylov_idx] += krylov_basis[projection_idx] * projection_matrix[projection_idx][krylov_idx]
+#                    del krylov_basis
+#                    krylov_basis = krylov_basis_copy
+                    eigenvalues, eigenvectors = np.linalg.eig(krylov_basis['hessian'])
+                    eigenvalues = np.abs(eigenvalues)
+                    np.clip(eigenvalues, np.max(eigenvalues) * self.krylov_eigenvalue_floor_const, float("Inf"), out=eigenvalues)
+                    inv_hessian_cond = np.dot(np.dot(eigenvectors, np.diag(1./eigenvalues)),np.transpose(eigenvectors))
+                    inv_chol_factor = sl.cholesky(inv_hessian_cond) #numpy version gives lower triangular, scipy gives ut
+                    for basis_num in range(self.krylov_num_directions+1):
+                        krylov_basis[basis_num] *= inv_chol_factor[basis_num][basis_num]
+                        for basis_mix_idx in range(basis_num+1,self.krylov_num_directions+1):
+                            krylov_basis[basis_num] += krylov_basis[basis_mix_idx] * inv_chol_factor[basis_num][basis_mix_idx]
                 #some_grad = np.zeros(len(krylov_basis.keys())-1) #-1 for 'hessian' key
                 #print some_grad
                 #print some_grad.shape[0]
@@ -1296,7 +1299,7 @@ class NN_Trainer(Neural_Network):
                 #    some_grad[dim] = average_gradient.dot(krylov_basis[dim], excluded_keys) #check to see if GN matrix is PSD
                 #print some_grad
                 #sys.exit()
-                bfgs_batch_inputs = self.features[bfgs_index]
+                bfgs_batch_inputs = self.features[[bfgs_index]]
                 bfgs_batch_labels = self.labels[bfgs_index]
                 sys.stdout.write("\r                                                                \r")
                 sys.stdout.write("part 3/3: calculating mix of krylov basis using bfgs"), sys.stdout.flush()
@@ -1315,6 +1318,12 @@ class NN_Trainer(Neural_Network):
                 self.model += direction
                 prev_direction = copy.deepcopy(direction)
                 direction.clear()
+                batch_index += self.backprop_batch_size
+                cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+                print "cross-entropy at the end of the epoch is", cross_entropy
+                if self.l2_regularization_const > 0.0:
+                    print "regularized loss is", loss
+                print "number correctly classified is", num_correct, "of", num_examples
             #sub_batch_start_perc = (sub_batch_start_perc + 1.0 / self.krylov_num_batch_splits) % 1 #not sure if this is better, below line is what I used to get krylov results
             sub_batch_start_perc = (sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) % 1
             cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
@@ -1715,7 +1724,7 @@ class NN_Trainer(Neural_Network):
         if self.krylov_use_hessian_preconditioner:
             second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, 
                                                                            direction = second_order_direction, model = model, 
-                                                                           second_order_type = self.second_order_matrix)
+                                                                           second_order_type = self.second_order_matrix, hiddens = hiddens)
             for hessian_idx in range(self.krylov_num_directions+1):
                 krylov_basis['hessian'][hessian_idx,self.krylov_num_directions] = second_order_direction.dot(krylov_basis[hessian_idx], excluded_keys)
                 krylov_basis['hessian'][self.krylov_num_directions,hessian_idx] = krylov_basis['hessian'][hessian_idx,self.krylov_num_directions]

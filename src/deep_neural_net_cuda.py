@@ -221,7 +221,7 @@ class Neural_Network_Weight(object):
         self.check_weights()
     def init_zero_weights(self, architecture, last_layer_logistic=True, verbose=False):
         self.num_layers = len(architecture) - 1
-        self.bias['0'] = np.zeros((1,architecture[0]))
+        self.bias['0'] = gnp.zeros((1,architecture[0]))
         
         for layer_num in range(1,self.num_layers+1):
             weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])

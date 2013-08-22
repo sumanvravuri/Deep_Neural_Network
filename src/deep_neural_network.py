@@ -1325,13 +1325,13 @@ class NN_Trainer(Neural_Network):
                     print "regularized loss is", loss
                 print "number correctly classified is", num_correct, "of", num_examples
             #sub_batch_start_perc = (sub_batch_start_perc + 1.0 / self.krylov_num_batch_splits) % 1 #not sure if this is better, below line is what I used to get krylov results
-            sub_batch_start_perc = (sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) % 1
-            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
-            
-            print "cross-entropy at the end of the epoch is", cross_entropy
-            if self.l2_regularization_const > 0.0:
-                print "regularized loss is", loss
-            print "number correctly classified is", num_correct, "of", num_examples
+#            sub_batch_start_perc = (sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) % 1
+#            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
+#            
+#            print "cross-entropy at the end of the epoch is", cross_entropy
+#            if self.l2_regularization_const > 0.0:
+#                print "regularized loss is", loss
+#            print "number correctly classified is", num_correct, "of", num_examples
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)])) 
                 
@@ -2122,7 +2122,7 @@ class NN_Trainer(Neural_Network):
     def conjugate_gradient(self, batch_inputs, batch_labels, num_epochs, model = None, damping_factor = 0.0, #seems to be correct, compare with conjugate_gradient.py
                            verbose = False, preconditioner = None, gradient = None, second_order_type='gauss-newton', 
                            init_search_direction = None):
-        #minimizes function q_x(p) = \grad_x f(x)' p + 1/2 * p'Gp (where x is fixed) use linear conjugate gradient
+        """minimizes function q_x(p) = \grad_x f(x)' p + 1/2 * p'Gp (where x is fixed) use linear conjugate gradient"""
         if verbose:
             print "preconditioner is", preconditioner
         excluded_keys = {'bias':['0'], 'weights':[]} 

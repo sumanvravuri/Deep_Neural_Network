@@ -260,8 +260,8 @@ class Neural_Network_Weight(object):
             print " of layer 0 does not equal visible weight dimensions ", self.weights['01'].shape[0], "... Exiting now"
             sys.exit()
         if self.bias['1'].shape[1] != self.weights['01'].shape[1]:
-            print "Number of hidden bias dimensions: ", self.weights['bias1'].shape[1],
-            print " of layer 0 does not equal hidden weight dimensions ", self.weights['weights01'].shape[1], "... Exiting now"
+            print "Number of hidden bias dimensions: ", self.bias['1'].shape[1],
+            print " of layer 0 does not equal hidden weight dimensions ", self.weights['01'].shape[1], "... Exiting now"
             sys.exit()
         
         #intermediate layers need to have correct shape and RBM type
@@ -2348,9 +2348,9 @@ class NN_Trainer(Neural_Network):
         model_vals = list()
         
         model_update = Neural_Network_Weight(num_layers=model.num_layers)
-        model_update.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
+        model_update.init_zero_weights(model.get_architecture(), last_layer_logistic=True, verbose=False)
         
-        batch_size = batch_inputs.shape[0]
+#        batch_size = batch_inputs.shape[0]
         clean_hiddens_flag = False
         clean_gradient_flag = False
 

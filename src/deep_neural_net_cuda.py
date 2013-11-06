@@ -750,10 +750,9 @@ class NN_Tester(Neural_Network): #completed
         if self.label_file_name != None:
             self.labels = self.read_label_file()
             self.check_labels()
-            print self.labels
         else:
             del self.label_file_name
-        #print self.labels
+            
         self.dump_config_vals()
         self.classify()
         self.write_posterior_prob_file()

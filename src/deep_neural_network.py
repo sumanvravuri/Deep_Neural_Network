@@ -17,6 +17,7 @@ import sys
 import numpy as np
 import scipy.io as sp
 import scipy.linalg as sl
+from scipy.special import expit
 import scipy.optimize as sopt
 import math
 import copy
@@ -25,7 +26,8 @@ import argparse
 class Vector_Math:
     #math functions
     def sigmoid(self,inputs): #completed, expensive, should be compiled
-        return 1./(1+np.exp(-inputs)) #1/(1+e^-X)
+        return expit(inputs)
+        #return 1./(1.+np.exp(-inputs)) #1/(1+e^-X)
     def softmax(self, inputs): #completed, expensive, should be compiled
         #subtracting max value of each data point below for numerical stability
         #exp_inputs = np.exp(inputs - np.transpose(np.tile(np.max(inputs,axis=1), (inputs.shape[1],1))))
@@ -36,7 +38,11 @@ class Vector_Math:
         #print "weight dims are ", weights.shape
         #print "bias dims are ", biases.shape
         #return np.dot(inputs,weights)+np.tile(biases, (inputs.shape[0],1))
-        return np.dot(inputs,weights) + biases#[np.newaxis, :]
+#        return slb.cblas.dgemm(alpha=1.0, a=inputs, b=weights) + biases
+        out = np.dot(inputs,weights)
+        out += biases
+        return out
+#        return np.dot(inputs,weights) + biases#[np.newaxis, :]
 class Neural_Network_Weight(object):
     def __init__(self, num_layers=0, weights=None, bias=None, weight_type=None):
         #num_layers
@@ -184,15 +190,15 @@ class Neural_Network_Weight(object):
                 print "no layers found. Need at least one layer... Exiting now"
                 sys.exit()
         try:
-            self.bias['0'] = weight_dict['bias0']
+            self.bias['0'] = np.array(weight_dict['bias0'], order='C')
         except KeyError:
             print "bias0 not found. bias0 must exist for", weight_matrix_name, "to be a valid weight file... Exiting now"
             sys.exit()
         for layer_num in range(1,self.num_layers+1): #changes weight layer type to ascii string, which is what we'll need for later functions
             weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
             bias_cur_layer = str(layer_num)
-            self.weights[weight_cur_layer] = weight_dict[''.join(['weights', weight_cur_layer])]
-            self.bias[bias_cur_layer] = weight_dict[''.join(['bias', bias_cur_layer])]  
+            self.weights[weight_cur_layer] = np.array(weight_dict[''.join(['weights', weight_cur_layer])], order='C')
+            self.bias[bias_cur_layer] = np.array(weight_dict[''.join(['bias', bias_cur_layer])], order='C')
             self.weight_type[weight_cur_layer] = weight_dict[''.join(['weights',weight_cur_layer,'_type'])][0].encode('ascii', 'ignore')
         del weight_dict
         self.check_weights()
@@ -565,13 +571,13 @@ class Neural_Network(object, Vector_Math):
                 return default_value
     def read_feature_file(self): #completed
         try:
-            return sp.loadmat(self.feature_file_name)['features'] #in MATLAB format
+            return np.array(sp.loadmat(self.feature_file_name)['features'], order='C') #in MATLAB format
         except IOError:
             print "Unable to open ", self.feature_file_name, "... Exiting now"
             sys.exit()
     def read_label_file(self): #completed
         try:
-            return sp.loadmat(self.label_file_name)['labels'] #in MATLAB format
+            return np.array(sp.loadmat(self.label_file_name)['labels'], order='C') #in MATLAB format
         except IOError:
             print "Unable to open ", self.label_file_name, "... Exiting now"
             sys.exit()
@@ -1889,9 +1895,9 @@ class NN_Trainer(Neural_Network):
         excluded_keys = {'bias': ['0'], 'weights': []}
         
         if self.do_backprop == False:
-            classification_batch_size = 4096
+            classification_batch_size = 32768
         else:
-            classification_batch_size = max(self.backprop_batch_size, 4096)
+            classification_batch_size = max(self.backprop_batch_size, 32768)
         
         batch_index = 0
         end_index = 0

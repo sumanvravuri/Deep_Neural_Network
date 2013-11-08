@@ -572,7 +572,7 @@ class Neural_Network(object, Vector_Math):
             sys.exit()
     def read_label_file(self): #completed
         try:
-            return sp.loadmat(self.label_file_name)['labels'] #in MATLAB format
+            return sp.loadmat(self.label_file_name)['labels'].astype(int) #in MATLAB format
         except IOError:
             print "Unable to open ", self.label_file_name, "... Exiting now"
             sys.exit()
@@ -767,7 +767,7 @@ class NN_Tester(Neural_Network): #completed
     def write_posterior_prob_file(self): #completed
         try:
             print "Writing to", self.output_name
-            sp.savemat(self.output_name,{'targets' : self.posterior_probs}, oned_as='column') #output name should have .mat extension
+            sp.savemat(self.output_name,{'targets' : self.posterior_probs.as_numpy_array()}, oned_as='column') #output name should have .mat extension
         except IOError:
             print "Unable to write to ", self.output_name, "... Exiting now"
             sys.exit()
@@ -1037,7 +1037,7 @@ class NN_Trainer(Neural_Network):
         if self.l2_regularization_const > 0.0:
             print "regularized loss is", loss
         print "number correctly classified is", num_correct, "of", num_examples
-
+        fat_labels = np.zeros((self.backprop_batch_size, np.max(self.labels) + 1))
         for epoch_num in range(len(self.steepest_learning_rate)):
             print "At epoch", epoch_num+1, "of", len(self.steepest_learning_rate), "with learning rate", self.steepest_learning_rate[epoch_num]
             batch_index = 0
@@ -1050,9 +1050,13 @@ class NN_Trainer(Neural_Network):
                 hiddens = self.forward_first_order_methods(self.features[batch_index:end_index], self.model)
                 #calculating negative gradient of log softmax
                 weight_vec = -hiddens[self.model.num_layers] #batchsize x n_outputs
-                for label_index in range(batch_index,end_index):
-                    data_index = label_index - batch_index
-                    weight_vec[data_index, int(self.labels[label_index])] += 1 #the int is to enforce proper indexing
+                batch_labels = self.labels[batch_index:end_index]
+                fat_labels.flat[np.arange(0,weight_vec.shape[1] * batch_labels.size, weight_vec.shape[1]) + batch_labels.ravel()] = 1.
+                weight_vec -= fat_labels[:batch_size,:]
+                fat_labels.flat[np.arange(0,weight_vec.shape[1] * batch_labels.size, weight_vec.shape[1]) + batch_labels.ravel()] = 0.
+#                for label_index in range(batch_index,end_index):
+#                    data_index = label_index - batch_index
+#                    weight_vec[data_index, int(self.labels[label_index])] += 1 #the int is to enforce proper indexing
                 #averaging batches
                 bias_update = gnp.sum(weight_vec, axis=0)
                 weight_update = gnp.dot(hiddens[self.model.num_layers-1].T, weight_vec)
@@ -1065,7 +1069,7 @@ class NN_Trainer(Neural_Network):
                     bias_cur_layer = str(layer_num)
                     bias_next_layer = str(layer_num+1)
                     weight_vec = gnp.dot(weight_vec, self.model.weights[weight_next_layer].T) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out), do the biases get involved in this calculation???
-                    gnp.free_reuse_cache(False)
+#                    gnp.free_reuse_cache(False)
                     self.model.weights[weight_next_layer] += self.steepest_learning_rate[epoch_num] / batch_size * (weight_update - self.l2_regularization_const * self.model.weights[weight_next_layer])
                     self.model.bias[bias_next_layer][0] += self.steepest_learning_rate[epoch_num] / batch_size * (bias_update - self.l2_regularization_const * self.model.bias[bias_next_layer][0])
                     del bias_update
@@ -1463,9 +1467,9 @@ class NN_Trainer(Neural_Network):
 #        print "Amount of memory after first order methods in use is", gnp.memory_in_use(True), "MB"
         #derivative of log(cross-entropy softmax)
         weight_vec = hiddens[model.num_layers] #batchsize x n_outputs
-
-        for index in range(batch_size):
-            weight_vec[index, int(batch_labels[index])] -= 1
+        fat_labels = np.zeros(weight_vec.shape)
+        fat_labels.flat[np.arange(0,weight_vec.shape[1] * batch_labels.size, weight_vec.shape[1]) + batch_labels.ravel()] = 1.
+        weight_vec -= fat_labels
 #        print "Amount of memory before backward pass in use is", gnp.memory_in_use(True), "MB"
         gradient_weights = self.backward_pass(weight_vec, hiddens, model)
         if clean_hiddens_flag:
@@ -2062,11 +2066,10 @@ class NN_Trainer(Neural_Network):
             model = self.model
         
         excluded_keys = {'bias': ['0'], 'weights': []}
-        
         if self.do_backprop == False:
-            classification_batch_size = 4096
+            classification_batch_size = 8192
         else:
-            classification_batch_size = max(self.backprop_batch_size, 4096)
+            classification_batch_size = max(self.backprop_batch_size, 8192)
         
         batch_index = 0
         end_index = 0

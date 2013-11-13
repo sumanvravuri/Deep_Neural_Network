@@ -16,8 +16,10 @@ import argparse
 
 class Vector_Math:
     #math functions
-    def sigmoid(self,inputs): #completed, expensive, should be compiled
-        return inputs.logistic()#1/(1+e^-X)
+    def sigmoid(self, inputs, target = None): #completed, expensive, should be compiled
+        if target == None:
+            return inputs.logistic()#1/(1+e^-X)
+        cm.sigmoid(inputs._base_as_row(), target._base_as_row())
     def softmax(self, inputs): #completed, expensive, should be compiled
         #subtracting max value of each data point below for numerical stability
         #exp_inputs = np.exp(inputs - np.transpose(np.tile(np.max(inputs,axis=1), (inputs.shape[1],1))))
@@ -28,7 +30,9 @@ class Vector_Math:
         #print "weight dims are ", weights.shape
         #print "bias dims are ", biases.shape
         #return np.dot(inputs,weights)+np.tile(biases, (inputs.shape[0],1))
-        return gnp.dot(inputs,weights) + biases#[np.newaxis, :]
+        outputs = gnp.outer(gnp.ones(inputs.shape[0]),biases)
+        gnp.dot(inputs,weights, outputs) #[np.newaxis, :]
+        return outputs
 class Neural_Network_Weight(object):
     def __init__(self, num_layers=0, weights=None, bias=None, weight_type=None):
         #num_layers
@@ -677,7 +681,8 @@ class Neural_Network(object, Vector_Math):
             gnp.free_reuse_cache(False)
             return outputs
         elif weight_type == 'rbm_gaussian_bernoulli' or weight_type == 'rbm_bernoulli_bernoulli':
-            outputs = self.sigmoid(self.weight_matrix_multiply(inputs, weights, biases))
+            outputs = self.weight_matrix_multiply(inputs, weights, biases)
+            self.sigmoid(outputs, outputs)
             gnp.free_reuse_cache(False)
             return outputs
         #added to test finite differences calculation for pearlmutter forward pass
@@ -1037,56 +1042,29 @@ class NN_Trainer(Neural_Network):
         if self.l2_regularization_const > 0.0:
             print "regularized loss is", loss
         print "number correctly classified is", num_correct, "of", num_examples
-        fat_labels = np.zeros((self.backprop_batch_size, np.max(self.labels) + 1))
-        for epoch_num in range(len(self.steepest_learning_rate)):
-            print "At epoch", epoch_num+1, "of", len(self.steepest_learning_rate), "with learning rate", self.steepest_learning_rate[epoch_num]
+        ones_vec = gnp.ones((1, self.backprop_batch_size))
+        ones_vec_last_batch = gnp.ones((1, self.num_training_examples % self.backprop_batch_size))
+        num_epochs = len(self.steepest_learning_rate)
+        for epoch_num, learning_rate in enumerate(self.steepest_learning_rate):
+            print "At epoch", epoch_num + 1, "of", num_epochs, "with learning rate", learning_rate
             batch_index = 0
             end_index = 0
             while end_index < self.num_training_examples: #run through the batches
-                per_done = float(batch_index)/self.num_training_examples*100
+                per_done = float(batch_index) / self.num_training_examples * 100
                 sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
                 end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
                 batch_size = end_index - batch_index
-                hiddens = self.forward_first_order_methods(self.features[batch_index:end_index], self.model)
-                #calculating negative gradient of log softmax
-                weight_vec = -hiddens[self.model.num_layers] #batchsize x n_outputs
-                batch_labels = self.labels[batch_index:end_index]
-                fat_labels.flat[np.arange(0,weight_vec.shape[1] * batch_labels.size, weight_vec.shape[1]) + batch_labels.ravel()] = 1.
-                weight_vec -= fat_labels[:batch_size,:]
-                fat_labels.flat[np.arange(0,weight_vec.shape[1] * batch_labels.size, weight_vec.shape[1]) + batch_labels.ravel()] = 0.
-#                for label_index in range(batch_index,end_index):
-#                    data_index = label_index - batch_index
-#                    weight_vec[data_index, int(self.labels[label_index])] += 1 #the int is to enforce proper indexing
-                #averaging batches
-                bias_update = gnp.sum(weight_vec, axis=0)
-                weight_update = gnp.dot(hiddens[self.model.num_layers-1].T, weight_vec)
-                gnp.free_reuse_cache(False)
-                #I don't use calculate_gradient because structure allows me to store only one layer of weights
-                
-                for layer_num in range(self.model.num_layers-1,0,-1):
-                    weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
-                    weight_next_layer = ''.join([str(layer_num),str(layer_num+1)])
-                    bias_cur_layer = str(layer_num)
-                    bias_next_layer = str(layer_num+1)
-                    weight_vec = gnp.dot(weight_vec, self.model.weights[weight_next_layer].T) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out), do the biases get involved in this calculation???
-#                    gnp.free_reuse_cache(False)
-                    self.model.weights[weight_next_layer] += self.steepest_learning_rate[epoch_num] / batch_size * (weight_update - self.l2_regularization_const * self.model.weights[weight_next_layer])
-                    self.model.bias[bias_next_layer][0] += self.steepest_learning_rate[epoch_num] / batch_size * (bias_update - self.l2_regularization_const * self.model.bias[bias_next_layer][0])
-                    del bias_update
-                    del weight_update
-                    bias_update = gnp.sum(weight_vec, axis=0)
-                    weight_update = gnp.dot(hiddens[layer_num-1].T, weight_vec)
-                    gnp.free_reuse_cache(False)
-                    
-                #do final weight_update
-                self.model.weights[weight_cur_layer] += self.steepest_learning_rate[epoch_num] / batch_size * (weight_update - self.l2_regularization_const * self.model.weights[weight_cur_layer])
-                self.model.bias[bias_cur_layer][0] += self.steepest_learning_rate[epoch_num] / batch_size * (bias_update - self.l2_regularization_const * self.model.bias[bias_cur_layer][0])
-                del bias_update
-                del weight_update
-                del weight_vec
+                batch_one_vec = ones_vec
+                if batch_size != self.backprop_batch_size:
+                    batch_one_vec = ones_vec_last_batch
+                self.steepest_descent_batch(self.features[batch_index:end_index], gnp.garray(self.labels[batch_index:end_index]), 
+                                            self.model, learning_rate, batch_one_vec, l2_regularization_const = self.l2_regularization_const)
                 gnp.free_reuse_cache(False)
                 batch_index += self.backprop_batch_size
+                
             sys.stdout.write("\r100.0% done \r"), sys.stdout.flush()
+            print ""
+            print gnp.memory_in_use(True)
             
             cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.features, self.labels, self.model)
             print "cross-entropy at the end of the epoch is", cross_entropy
@@ -1097,6 +1075,27 @@ class NN_Trainer(Neural_Network):
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
                 
+    def steepest_descent_batch(self, batch_inputs, batch_labels, model, learning_rate, batch_one_vec = None, l2_regularization_const = 0.0):
+        batch_size = batch_inputs.shape[0]
+        if batch_one_vec == None:
+            batch_one_vec = gnp.ones((1, batch_size))
+        hiddens = self.forward_first_order_methods(batch_inputs, model)
+        #calculating negative gradient of log softmax
+        weight_vec = -hiddens[model.num_layers] #batchsize x n_outputs
+        gnp.update_by_row_scalar(weight_vec, batch_labels, 1.0, weight_vec)
+        bias_cur_layer = str(model.num_layers)
+        weight_cur_layer = ''.join([str(model.num_layers-1), str(model.num_layers)])
+        gnp.gemm_update(batch_one_vec, weight_vec, learning_rate / self.backprop_batch_size, model.bias[bias_cur_layer], (1. - l2_regularization_const))
+        gnp.gemm_update(hiddens[self.model.num_layers-1].T, weight_vec, learning_rate / self.backprop_batch_size, model.weights[weight_cur_layer], (1. - l2_regularization_const))
+        for layer_num in range(self.model.num_layers-1,0,-1):
+            weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
+            weight_next_layer = ''.join([str(layer_num),str(layer_num+1)])
+            bias_cur_layer = str(layer_num)
+            weight_vec = gnp.dot(weight_vec, self.model.weights[weight_next_layer].T)
+            gnp.update_by_dsigmoid(hiddens[layer_num], weight_vec)
+            gnp.gemm_update(batch_one_vec, weight_vec, learning_rate / self.backprop_batch_size, model.bias[bias_cur_layer], (1. - l2_regularization_const))
+            gnp.gemm_update(hiddens[layer_num-1].T, weight_vec, learning_rate / self.backprop_batch_size, model.weights[weight_cur_layer], (1. - l2_regularization_const))
+            
     def backprop_conjugate_gradient(self): #Running... need preconditioners
         #in this framework "points" are self.weights
         #will also need to store CG-direction, which will be in dictionary conj_grad_dir
@@ -1467,9 +1466,10 @@ class NN_Trainer(Neural_Network):
 #        print "Amount of memory after first order methods in use is", gnp.memory_in_use(True), "MB"
         #derivative of log(cross-entropy softmax)
         weight_vec = hiddens[model.num_layers] #batchsize x n_outputs
-        fat_labels = np.zeros(weight_vec.shape)
-        fat_labels.flat[np.arange(0,weight_vec.shape[1] * batch_labels.size, weight_vec.shape[1]) + batch_labels.ravel()] = 1.
-        weight_vec -= fat_labels
+#        fat_labels = np.zeros(weight_vec.shape)
+#        fat_labels.flat[np.arange(0,weight_vec.shape[1] * batch_labels.size, weight_vec.shape[1]) + batch_labels.ravel()] = 1.
+#        weight_vec -= fat_labels
+        gnp.update_by_row_scalar(weight_vec, gnp.garray(batch_labels), -1.0, weight_vec)
 #        print "Amount of memory before backward pass in use is", gnp.memory_in_use(True), "MB"
         gradient_weights = self.backward_pass(weight_vec, hiddens, model)
         if clean_hiddens_flag:
@@ -1636,7 +1636,7 @@ class NN_Trainer(Neural_Network):
         #print "Amount of memory before model update is", gnp.memory_in_use(True), "MB"
         output_model.bias[bias_cur_layer] = gnp.sum(weight_vec, axis=0)
         #print "Amount of memory after bias update is", gnp.memory_in_use(True), "MB"
-        output_model.weights[weight_cur_layer] = gnp.dot(hiddens[model.num_layers-1].T, weight_vec)
+        gnp.dot(hiddens[model.num_layers-1].T, weight_vec, output_model.weights[weight_cur_layer])
         #print "Amount of memory after model update is", gnp.memory_in_use(True), "MB"
         gnp.free_reuse_cache(False)
         #print "Amount of memory before loop is", gnp.memory_in_use(True), "MB"
@@ -1646,9 +1646,9 @@ class NN_Trainer(Neural_Network):
             weight_next_layer = ''.join([str(layer_num),str(layer_num+1)])
             bias_cur_layer = str(layer_num)
             #print "Amount of memory before weight_vec transform at layer", layer_num, "is", gnp.memory_in_use(True), "MB"
-            weight_vec = gnp.dot(weight_vec, model.weights[weight_next_layer].T) * hiddens[layer_num] * (1-hiddens[layer_num]) #n_hid x n_out * (batchsize x n_out)
+            weight_vec = gnp.dot(weight_vec, model.weights[weight_next_layer].T) #n_hid x n_out * (batchsize x n_out)
+            gnp.update_by_dsigmoid(hiddens[layer_num], weight_vec)
 #            print "Amount of memory after weight_vec transform at layer", layer_num, "is", gnp.memory_in_use(True), "MB"
-            gnp.free_reuse_cache(False)
             #print "Amount of memory after weight_vec freed cache at layer", layer_num, "is", gnp.memory_in_use(True), "MB"
 #            weight_vec = gnp.dot(weight_vec, model.weights[weight_next_layer].T)
 #            print "Amount of memory after weight_vec2 transform at layer", layer_num, "is", gnp.memory_in_use(True), "MB"

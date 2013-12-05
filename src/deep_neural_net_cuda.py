@@ -25,11 +25,9 @@ class Vector_Math:
         cm.sigmoid(inputs._base_as_row(), target._base_as_row())
         
     def softmax(self, inputs, target = None): #completed, expensive, should be compiled
-        #subtracting max value of each data point below for numerical stability
-        #exp_inputs = np.exp(inputs - np.transpose(np.tile(np.max(inputs,axis=1), (inputs.shape[1],1))))
+        """subtracting max value of each data point below for numerical stability
+        exp_inputs = np.exp(inputs - np.transpose(np.tile(np.max(inputs,axis=1), (inputs.shape[1],1))))"""
         
-#        exp_inputs = gnp.exp(inputs - gnp.max(inputs,axis=1)[:,gnp.newaxis])
-#        return exp_inputs / gnp.sum(exp_inputs, axis=1)[:, gnp.newaxis]
         return_output = False
         if target is None:
             target = gnp.empty(inputs.shape)
@@ -40,17 +38,13 @@ class Vector_Math:
         if return_output:
             return target
     
-    def weight_matrix_multiply(self, inputs, weights, biases, target = None): #completed, expensive, should be compiled
-        #print "input dims are ", inputs.shape
-        #print "weight dims are ", weights.shape
-        #print "bias dims are ", biases.shape
-        #return np.dot(inputs,weights)+np.tile(biases, (inputs.shape[0],1))
-        if target == None:
-            target = gnp.dot(inputs, weights)
-            target.add_row_vec(biases)
+    def weight_matrix_multiply(self,inputs,weights,biases, target = None): #completed, expensive, should be compiled
+        if target is None:
+            target = gnp.outer(gnp.ones(inputs.shape[0]),biases)
+            gnp.dot(inputs, weights, target) #[np.newaxis, :]
             return target
         gnp.dot(inputs, weights, target)
-        target.add_row_vec(biases)
+        target += gnp.outer(gnp.ones(inputs.shape[0]),biases)
         
 class Neural_Network_Weight(object):
     def __init__(self, num_layers=0, weights=None, bias=None, weight_type=None):
@@ -109,6 +103,7 @@ class Neural_Network_Weight(object):
                 continue
             return_val += gnp.fast_vdot(self.weights[key], nn_weight2.weights[key])
         return return_val
+    
     def print_statistics(self):
         for key in self.bias.keys():
             print "min of bias[%s] is %d" % (key, gnp.min(self.bias[key]) )
@@ -120,8 +115,10 @@ class Neural_Network_Weight(object):
             print "max of weights[%s] is %d" % (key, gnp.max(self.weights[key]))
             print "mean of weights[%s] is %d" % (key, gnp.mean(self.weights[key]))
             print "var of weights[%s] is %d\n" % (key, gnp.var(self.weights[key]))
+            
     def norm(self, excluded_keys = {'bias': [], 'weights': []}):
         return np.sqrt(self.dot(self))
+    
     def max(self, excluded_keys = {'bias': [], 'weights': []}):
         max_val = -float('Inf')
         for key in self.bias.keys():
@@ -133,6 +130,7 @@ class Neural_Network_Weight(object):
                 continue  
             max_val = gnp.max(gnp.max(self.weights[key]), max_val)
         return max_val
+    
     def min(self, excluded_keys = {'bias': [], 'weights': []}):
         min_val = float('Inf')
         for key in self.bias.keys():
@@ -144,6 +142,7 @@ class Neural_Network_Weight(object):
                 continue  
             min_val = gnp.min(gnp.min(self.weights[key]), min_val)
         return min_val
+    
     def clip(self, clip_min, clip_max, excluded_keys = {'bias': [], 'weights': []}):
         nn_output = copy.deepcopy(self)
         for key in self.bias.keys():
@@ -155,10 +154,13 @@ class Neural_Network_Weight(object):
                 continue  
             gnp.clip(self.weights[key], clip_min, clip_max, out=nn_output.weights[key])
         return nn_output
+    
     def get_architecture(self):
         return [self.bias[str(layer_num)].size for layer_num in range(self.num_layers+1) ]
+    
     def get_hiddens_structure(self):
         return [self.weights["".join([str(layer_num), str(layer_num+1)])].shape[1] for layer_num in range(self.num_layers) if 'logistic' not in self.weight_type["".join([str(layer_num), str(layer_num+1)])]]
+    
     def size(self, excluded_keys = {'bias': [], 'weights': []}):
         numel = 0
         for key in self.bias.keys():
@@ -170,6 +172,7 @@ class Neural_Network_Weight(object):
                 continue  
             numel += self.weights[key].size
         return numel
+    
     @property
     def size_nbytes(self):
         size = 0.
@@ -178,6 +181,7 @@ class Neural_Network_Weight(object):
         for key in self.weights.keys():
             size += self.weights[key].nbytes
         return size
+    
     @property
     def size_MB(self): #native gnumpy nMBytes doesn't convert int to float, so anything under 1MB, so doing it myself
         size = 0.
@@ -186,6 +190,7 @@ class Neural_Network_Weight(object):
         for key in self.weights.keys():
             size += self.weights[key].nbytes / float(2 ** 20)
         return size
+    
     def open_weights(self, weight_matrix_name): #completed
         #the weight file format is very specific, it contains the following variables:
         #weights01, weights12, weights23, ...
@@ -226,6 +231,7 @@ class Neural_Network_Weight(object):
             self.weight_type[weight_cur_layer] = weight_dict[''.join(['weights',weight_cur_layer,'_type'])][0].encode('ascii', 'ignore')
         del weight_dict
         self.check_weights()
+        
     def init_random_weights(self, architecture, initial_bias_max, initial_bias_min, initial_weight_min, 
                            initial_weight_max, last_layer_logistic=True, seed=0): #completed, expensive, should be compiled
         np.random.seed(seed)
@@ -250,6 +256,7 @@ class Neural_Network_Weight(object):
         
         print "Finished Initializing Weights"
         self.check_weights()
+        
     def init_zero_weights(self, architecture, last_layer_logistic=True, verbose=False):
         self.num_layers = len(architecture) - 1
         self.bias['0'] = gnp.zeros((1,architecture[0]))
@@ -269,6 +276,7 @@ class Neural_Network_Weight(object):
         if verbose:
             print "Finished Initializing Weights"
         self.check_weights(False)
+        
     def check_weights(self, verbose=True): #need to check consistency of features with weights
         #checks weights to see if following conditions are true
         # *feature dimension equal to number of rows of first layer (if weights are stored in n_rows x n_cols)
@@ -344,6 +352,7 @@ class Neural_Network_Weight(object):
                 sys.exit()
         if verbose:
             print "seems copacetic"
+            
     def write_weights(self, output_name): #completed
         weight_dict = dict()
         weight_dict['num_layers'] = self.num_layers
@@ -362,6 +371,7 @@ class Neural_Network_Weight(object):
         else:
             print output_name, "successfully saved"
             del weight_dict
+            
     def __neg__(self):
         nn_output = Neural_Network_Weight(self.num_layers) #copy.deepcopy(self.model) * 0
         nn_output.init_zero_weights(self.get_architecture(), last_layer_logistic = (self.weight_type[''.join([str(self.num_layers-1),str(self.num_layers)])] == 'logistic'))
@@ -370,6 +380,7 @@ class Neural_Network_Weight(object):
         for key in self.weights.keys():
             nn_output.weights[key] = -self.weights[key]
         return nn_output
+    
     def __add__(self,addend):
         nn_output = Neural_Network_Weight(self.num_layers) #copy.deepcopy(self.model) * 0
         nn_output.init_zero_weights(self.get_architecture(), last_layer_logistic = (self.weight_type[''.join([str(self.num_layers-1),str(self.num_layers)])] == 'logistic'))
@@ -411,6 +422,7 @@ class Neural_Network_Weight(object):
         for key in self.weights.keys():
             nn_output.weights[key] = self.weights[key] - subtrahend
         return nn_output
+    
     def __mul__(self, multiplier):
         #if type(scalar) is not float and type(scalar) is not int:
         #    print "__mul__ must be by a float or int. Instead it is type", type(scalar), "Exiting now"
@@ -431,6 +443,7 @@ class Neural_Network_Weight(object):
         for key in self.weights.keys():
             nn_output.weights[key] = self.weights[key] * multiplier
         return nn_output
+    
     def __div__(self, divisor):
         #if type(scalar) is not float and type(scalar) is not int:
         #    print "Divide must be by a float or int. Instead it is type", type(scalar), "Exiting now"
@@ -451,6 +464,7 @@ class Neural_Network_Weight(object):
         for key in self.weights.keys():
             nn_output.weights[key] = self.weights[key] / divisor
         return nn_output
+    
     def __iadd__(self, nn_weight2):
         if type(nn_weight2) is not Neural_Network_Weight:
             print "argument must be of type Neural_Network_Weight... instead of type", type(nn_weight2), "Exiting now..."
@@ -464,6 +478,7 @@ class Neural_Network_Weight(object):
         for key in self.weights.keys():
             self.weights[key] += nn_weight2.weights[key]
         return self
+    
     def __isub__(self, nn_weight2):
         if type(nn_weight2) is not Neural_Network_Weight:
             print "argument must be of type Neural_Network_Weight... instead of type", type(nn_weight2), "Exiting now..."
@@ -477,6 +492,7 @@ class Neural_Network_Weight(object):
         for key in self.weights.keys():
             self.weights[key] -= nn_weight2.weights[key]
         return self
+    
     def __imul__(self, scalar):
         #if type(scalar) is not float and type(scalar) is not int:
         #    print "__imul__ must be by a float or int. Instead it is type", type(scalar), "Exiting now"
@@ -487,6 +503,7 @@ class Neural_Network_Weight(object):
         for key in self.weights.keys():
             self.weights[key] *= scalar
         return self
+    
     def __idiv__(self, scalar):
         scalar = float(scalar)
         for key in self.bias.keys():
@@ -494,6 +511,7 @@ class Neural_Network_Weight(object):
         for key in self.weights.keys():
             self.weights[key] /= scalar
         return self
+    
     def __pow__(self, scalar):
         if scalar == 2:
             return self * self
@@ -504,8 +522,10 @@ class Neural_Network_Weight(object):
         for key in self.weights.keys():
             nn_output.weights[key] = self.weights[key] ** scalar
         return nn_output
+    
     def __copy__(self):
         return Neural_Network_Weight(self.num_layers, self.weights, self.bias, self.weight_type)
+    
     def __deepcopy__(self, memo):
         return Neural_Network_Weight(copy.deepcopy(self.num_layers, memo), copy.deepcopy(self.weights,memo), 
                                      copy.deepcopy(self.bias,memo), copy.deepcopy(self.weight_type,memo))
@@ -778,18 +798,18 @@ class Neural_Network(object, Vector_Math):
             outputs = gnp.empty((inputs.shape[0], weights.shape[1]))
             
         if weight_type == 'logistic':
-            self.weight_matrix_multiply(inputs, weights, biases, outputs)
+            outputs[...] = self.weight_matrix_multiply(inputs, weights, biases)
             self.softmax(outputs, outputs)
 #            gnp.free_reuse_cache(False)
 #            return outputs
         elif weight_type == 'rbm_gaussian_bernoulli' or weight_type == 'rbm_bernoulli_bernoulli':
-            self.weight_matrix_multiply(inputs, weights, biases, outputs)
+            outputs[...] = self.weight_matrix_multiply(inputs, weights, biases)
             self.sigmoid(outputs, outputs)
 #            gnp.free_reuse_cache(False)
 #            return outputs
         #added to test finite differences calculation for pearlmutter forward pass
         elif weight_type == 'linear':
-            self.weight_matrix_multiply(inputs, weights, biases, outputs)
+            outputs[...] = self.weight_matrix_multiply(inputs, weights, biases)
 #            gnp.free_reuse_cache(False)
 #            return outputs
         else:
@@ -1027,8 +1047,8 @@ class NN_Trainer(Neural_Network):
             
             self.num_frames_buf = min(self.num_frames_buf, self.backprop_batch_size * self.memory_management(self.backprop_method, verbose = False , num_feature_chunks = None, return_num_feature_chunks = True))
             
-#        self.features = gnp.empty((self.num_frames_buf, self.num_feature_dim))
-        self.features = gnp.empty((60000, self.num_feature_dim))
+        self.features = gnp.empty((self.num_frames_buf, self.num_feature_dim))
+#        self.features = gnp.empty((60000, self.num_feature_dim))
         self.dump_config_vals()
         
     def train(self): #completed
@@ -1050,6 +1070,36 @@ class NN_Trainer(Neural_Network):
     #===========================================================================
     # forward pass methods
     #===========================================================================
+    def old_calculate_classification_statistics(self, features, labels, model=None):
+        if model == None:
+            model = self.model
+        
+        excluded_keys = {'bias': ['0'], 'weights': []}
+        if self.do_backprop == False:
+            classification_batch_size = 8192
+        else:
+            classification_batch_size = max(self.backprop_batch_size, 8192)
+        
+        batch_index = 0
+        end_index = 0
+        cross_entropy = 0.0
+        num_correct = 0
+        num_examples = features.shape[0]
+        while end_index < num_examples: #run through the batches
+            end_index = min(batch_index+classification_batch_size, num_examples)
+            output = self.forward_pass(features[batch_index:end_index], verbose=False, model=model)
+            cross_entropy += self.calculate_cross_entropy(output, labels[batch_index:end_index])
+            
+            #don't use calculate_classification_accuracy() because of possible rounding error
+            prediction = output.argmax(axis=1).reshape(labels[batch_index:end_index].shape)
+            num_correct += np.sum(prediction == labels[batch_index:end_index])
+            batch_index += classification_batch_size
+        
+        loss = cross_entropy
+        if self.l2_regularization_const > 0.0:
+            loss += (model.norm(excluded_keys) ** 2) * self.l2_regularization_const
+        return cross_entropy, num_correct, num_examples, loss
+    
     def calculate_classification_statistics(self, frame_table, labels, model=None):
         if model == None:
             model = self.model
@@ -1067,7 +1117,7 @@ class NN_Trainer(Neural_Network):
         num_examples = last_frame - first_frame
         current_frame = frame_table[0]
         chunk_batch_size = min(self.num_frames_buf, num_examples)
-        
+#        print chunk_batch_size
         while current_frame < last_frame: #run through the batches
             end_frame, chunk_size = self.read_feature_chunk(current_frame, chunk_batch_size, verbose = False)
             batch_index = 0
@@ -1075,9 +1125,9 @@ class NN_Trainer(Neural_Network):
             while end_index < chunk_size:
                 per_done = float(current_frame - first_frame + batch_index) / num_examples * 100
                 sys.stdout.write("\rCalculating Classification Statistics: %.1f%% done\r" % per_done), sys.stdout.flush()
-                end_index = min(batch_index+classification_batch_size, num_examples)
+                end_index = min(batch_index+classification_batch_size, chunk_size)
                 output = self.forward_pass(self.features[batch_index:end_index], verbose=False, model=model)
-                batch_labels = labels[first_frame + batch_index: first_frame + end_index]
+                batch_labels = labels[current_frame + batch_index: current_frame + end_index]
                 cross_entropy += self.calculate_cross_entropy(output, batch_labels)
                 
                 #don't use calculate_classification_accuracy() because of possible rounding error
@@ -1376,8 +1426,9 @@ class NN_Trainer(Neural_Network):
 
     def backprop_truncated_newton(self):
         print "Starting backprop using truncated newton"
-        print "Number of layers is", self.model.num_layers
-        self.memory_management()
+        num_feature_chunks = self.num_frames_buf / self.backprop_batch_size
+        num_chunk_frames = num_feature_chunks * self.backprop_batch_size
+        self.memory_management('truncated_newton', True, num_feature_chunks, False)
         
         cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
         print "cross-entropy before truncated newton is", cross_entropy
@@ -1385,82 +1436,83 @@ class NN_Trainer(Neural_Network):
             print "regularized loss is", loss
         print "number correctly classified is", num_correct, "of", num_examples
         
-        excluded_keys = {'bias':['0'], 'weights':[]} 
+        
         damping_factor = self.truncated_newton_init_damping_factor
         gradient = Neural_Network_Weight(self.model.num_layers)
         gradient.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
         preconditioner = None
         model_update = None
         
-        end_frame, chunk_size = self.read_feature_chunk(0, 60000, shuffle=False)
+        
         for epoch_num in range(self.num_epochs):
-#            print "Amount of memory at the beginning of the epoch in use is", gnp.memory_in_use(True), "MB"
-            print "Epoch", epoch_num+1, "of", self.num_epochs
-            batch_index = 0
-            end_index = 0
-            
-            while end_index < self.num_training_examples: #run through the batches
-                per_done = float(batch_index)/self.num_training_examples*100
-                sys.stdout.write("\r                                                                \r") #clear line
-                sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
-                sys.stdout.write("\r                                                                \r") #clear line
-                sys.stdout.write("\rdamping factor is %f\r" % damping_factor), sys.stdout.flush()
-                end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
-                print "\nto end index", end_index
-                batch_inputs = self.features[batch_index:end_index]
-                batch_labels = self.labels[batch_index:end_index]
-                batch_size = batch_inputs.shape[0]
-                
-                sys.stdout.write("\r                                                                \r") #clear line
-                sys.stdout.write("\rcalculating gradient\r"), sys.stdout.flush()
-#                print "Amount of memory before gradient calculation in use is", gnp.memory_in_use(True), "MB"
-                gradient = self.calculate_gradient(batch_inputs, batch_labels, check_gradient=False, model=self.model, gradient_weights = gradient)
-#                print "Amount of memory after gradient calculation in use is", gnp.memory_in_use(True), "MB"
-                old_loss = self.calculate_loss(batch_inputs, batch_labels, model=self.model) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
-#                print "Amount of memory after calculate_loss calculation in use is", gnp.memory_in_use(True), "MB"
-                if self.use_fisher_preconditioner:
-                    sys.stdout.write("\r                                                                \r")
-                    sys.stdout.write("calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
-                    
-                    preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model, l2_regularization_const = 0.0)
-                    # add regularization
-                    #preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
-                    preconditioner = (preconditioner + self.l2_regularization_const + damping_factor) ** (3./4.)
-                    preconditioner = preconditioner.clip(preconditioner.max(excluded_keys) * self.fisher_preconditioner_floor_val, float("Inf"))
-#                print "Amount of memory before conjugate_gradient calculation in use is", gnp.memory_in_use(True), "MB"
-                model_update, model_vals = self.conjugate_gradient(batch_inputs, batch_labels, self.truncated_newton_num_cg_epochs, model=self.model, 
-                                                                   damping_factor=damping_factor, preconditioner=preconditioner, gradient=gradient, 
-                                                                   second_order_type=self.second_order_matrix, init_search_direction=model_update,
-                                                                   verbose = False, hiddens = None)
-#                print "Amount of memory after conjugate_gradient calculation in use is", gnp.memory_in_use(True), "MB"
-                model_den = model_vals[-1] #- model_vals[0]
-                
-                self.model.add_mult(model_update, 1.0)
-#                gnp.free_reuse_cache(False)
-                new_loss = self.calculate_loss(batch_inputs, batch_labels, model=self.model)  #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
-                model_num = (new_loss - old_loss) / batch_size
-                sys.stdout.write("\r                                                                      \r") #clear line
-                print "model ratio is", model_num / model_den,
-                if model_num / model_den < 0.25:
-                    damping_factor *= 1.5
-                elif model_num / model_den > 0.75:
-                    damping_factor *= 2./3.
-                batch_index += self.backprop_batch_size
-                print "damping factor is", damping_factor
-                cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
-                print "cross-entropy at the end of the batch is", cross_entropy
-                if self.l2_regularization_const > 0.0:
-                    print "regularized loss is", loss
-                print "number correctly classified is", num_correct, "of", num_examples
-                
-            sys.stdout.write("\r100.0% done \r")
-#            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
-#            print "cross-entropy at the end of the epoch is", cross_entropy
-#            if self.l2_regularization_const > 0.0:
-#                print "regularized loss is", loss
-#            print "number correctly classified is", num_correct, "of", num_examples
+            print "Epoch", epoch_num + 1, "of", self.num_epochs
+            current_frame = 0
+
+            while current_frame < self.num_training_examples: #run through the batches
+                end_frame, chunk_size, permutation_vector = self.read_feature_chunk(current_frame, num_chunk_frames, shuffle=True)
+                batch_labels = self.shuffle_labels(self.labels[current_frame:end_frame], permutation_vector)
+                batch_index = 0
+                end_index = 0
+                while end_index < chunk_size:
+                    per_done = float(current_frame + batch_index) / self.num_training_examples * 100
+                    sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
+                    end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
+                    batch_size = end_index - batch_index
+                    if batch_size < self.backprop_batch_size:
+                        break
+                    self.truncated_newton_batch(self.features[batch_index:end_index], batch_labels[batch_index:end_index], 
+                                                self.model, damping_factor, gradient = None, 
+                                                init_search_direction = None, preconditioner = None, model_update = None)
+                    batch_index += self.backprop_batch_size
+                current_frame = end_frame
+            sys.stdout.write("\r100.0% done \r"), sys.stdout.flush()
+            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
+            #print "Amount of memory in use is", gnp.memory_in_use(True), "MB"
+            print "cross-entropy at the end of the epoch is", cross_entropy
+            if self.l2_regularization_const > 0.0:
+                print "regularized loss is", loss
+            print "number correctly classified is", num_correct, "of", num_examples
+
             if self.save_each_epoch:
-                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
+                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)])) 
+        
+        
+#        end_frame, chunk_size = self.read_feature_chunk(0, 60000, shuffle=False)
+#        for epoch_num in range(self.num_epochs):
+##            print "Amount of memory at the beginning of the epoch in use is", gnp.memory_in_use(True), "MB"
+#            print "Epoch", epoch_num+1, "of", self.num_epochs
+#            batch_index = 0
+#            end_index = 0
+#            
+#            while end_index < self.num_training_examples: #run through the batches
+#                per_done = float(batch_index)/self.num_training_examples*100
+#                sys.stdout.write("\r                                                                \r") #clear line
+#                sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
+#                sys.stdout.write("\r                                                                \r") #clear line
+#                sys.stdout.write("\rdamping factor is %f\r" % damping_factor), sys.stdout.flush()
+#                end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
+#                print "\nto end index", end_index
+#                batch_inputs = self.features[batch_index:end_index]
+#                batch_labels = self.labels[batch_index:end_index]
+#                batch_size = batch_inputs.shape[0]
+#                
+#                
+#                batch_index += self.backprop_batch_size
+#                print "damping factor is", damping_factor
+#                cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
+#                print "cross-entropy at the end of the batch is", cross_entropy
+#                if self.l2_regularization_const > 0.0:
+#                    print "regularized loss is", loss
+#                print "number correctly classified is", num_correct, "of", num_examples
+#                
+#            sys.stdout.write("\r100.0% done \r")
+##            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
+##            print "cross-entropy at the end of the epoch is", cross_entropy
+##            if self.l2_regularization_const > 0.0:
+##                print "regularized loss is", loss
+##            print "number correctly classified is", num_correct, "of", num_examples
+#            if self.save_each_epoch:
+#                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
 
     def backprop_krylov_subspace(self):
         #does backprop using krylov subspace
@@ -1472,6 +1524,7 @@ class NN_Trainer(Neural_Network):
         print "Number of layers is", self.model.num_layers
         self.memory_management()
 #        print "Amount of memory in use is", gnp.memory_in_use(True), "MB"
+#        end_frame, chunk_size = self.read_feature_chunk(0, 60000, shuffle=False)
         cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
         print "cross-entropy before krylov subspace is", cross_entropy
         if self.l2_regularization_const > 0.0:
@@ -1488,147 +1541,38 @@ class NN_Trainer(Neural_Network):
         average_gradient.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
         #print self.model.get_architecture()
         
-        sub_batch_start_perc = 0.0
+#        sub_batch_start_perc = 0.0
         preconditioner = None
 #        print "Amount of after allocating previous direction memory in use is", gnp.memory_in_use(True), "MB"
-        end_frame, chunk_size = self.read_feature_chunk(0, 60000, shuffle=False)
+        
         for epoch_num in range(self.num_epochs):
             print "Epoch", epoch_num + 1, "of", self.num_epochs
-            batch_index = 0
-            end_index = 0
-#            print "Amount of memory in use before epoch is", gnp.memory_in_use(True), "MB"
-            while end_index < self.num_training_examples: #run through the batches
-                #per_done = float(batch_index)/self.num_training_examples*100
-                #sys.stdout.write("\r%.1f%% done" % per_done), sys.stdout.flush()
-                end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
-                print "to end index", end_index
-                batch_size = end_index - batch_index
-                #print "Amount of memory before allocating gradient batch in use is", gnp.memory_in_use(True), "MB"
-                batch_inputs = self.features[batch_index:end_index] #:batch_index+1]
-                batch_labels = self.labels[batch_index:end_index] #:batch_index+1]
-                #print "Amount of memory after allocating gradient batch in use is", gnp.memory_in_use(True), "MB"
-                krylov_start_index = int(sub_batch_start_perc * batch_size)
-                bfgs_start_index = int((sub_batch_start_perc + 1.0 / self.krylov_num_batch_splits) * batch_size)
-                bfgs_end_index = int((sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) * batch_size)
-                krylov_index = [batch_index + x % batch_size for x in range(krylov_start_index, bfgs_start_index)] #[batch_index]
-                bfgs_index = [batch_index + x % batch_size for x in range(bfgs_start_index, bfgs_end_index)]
-                #print "krylov_index:", krylov_index
-                #print "bfgs_index:", bfgs_index
-                #print "krylov_start_index:", krylov_start_index, "bfgs_start_index:", bfgs_start_index, "bfgs_end_index", bfgs_end_index
-                sys.stdout.write("\r                                                                \r") #clear line
-                sys.stdout.write("part 1/3: calculating gradient"), sys.stdout.flush()
-                #print "\nAmount of memory in use before calc_gradient is", gnp.memory_in_use(True), "MB"
-                average_gradient = self.calculate_gradient(batch_inputs, batch_labels, False, self.model, gradient_weights = average_gradient)
-                #average_gradient.print_statistics()
-                #need to fix the what indices the batches are taken from... will always be the same subset
-                
-                #average_gradient = self.calculate_gradient(krylov_batch_inputs, krylov_batch_labels, self.model) / (batch_size / self.krylov_num_batch_splits)
-                if self.use_fisher_preconditioner:
-                    sys.stdout.write("\r                                                                \r")
-                    sys.stdout.write("part 1/3: calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
-                    preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model)
-                    #precon = (grad2 + mones(psize,1)*conv(lambda) + maskp*conv(weightcost)).^(3/4);
-                    # add regularization
-                    #preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * self.model.norm(excluded_keys) ** 2
-                    preconditioner = (preconditioner + self.l2_regularization_const) ** (3./4.)
-                    preconditioner = preconditioner.clip(preconditioner.max(excluded_keys) * self.fisher_preconditioner_floor_val, float("Inf"))
-                    #preconditioner.print_statistics()
-                    #sys.exit()
-                #print krylov_index
-                del batch_inputs
-                del batch_labels
-                gnp.free_reuse_cache(False)
-                #print "Amount of memory in use after calc_gradient is", gnp.memory_in_use(True), "MB"
-                krylov_batch_inputs = self.features[[krylov_index]]
-                krylov_batch_labels = self.labels[krylov_index]
-                #print "\nAmount of memory before krylov in use is", gnp.memory_in_use(True), "MB"
-                sys.stdout.write("\r                                                                \r")
-                sys.stdout.write("part 2/3: calculating krylov basis"), sys.stdout.flush()
-                krylov_basis = self.calculate_krylov_basis(krylov_batch_inputs, krylov_batch_labels, prev_direction, average_gradient, self.model, preconditioner) #, preconditioner = average_gradient ** 2)
-                del krylov_batch_inputs
-                del krylov_batch_labels
-                gnp.free_reuse_cache(False)
-                #print "\nAmount of memory after krylov in use is", gnp.memory_in_use(False) / float(2 ** 20), "MB"
-                if self.krylov_use_hessian_preconditioner:
-#                    U,singular_values,V = np.linalg.svd(krylov_basis['hessian'])#.as_numpy_array())
-#                    np.clip(singular_values, np.max(singular_values) * self.krylov_eigenvalue_floor_const, float("Inf"), out=singular_values)
-#                    projection_matrix = np.dot(U, np.diag(1. / np.sqrt(singular_values)))
-#                    krylov_basis_copy = dict()
-#                    for idx in range(self.krylov_num_directions+1):
-#                        krylov_basis_copy[idx] = krylov_basis[0] * projection_matrix[0][idx]
-#                        
-#                    for krylov_idx in range(0,self.krylov_num_directions+1):
-#                        for projection_idx in range(1,self.krylov_num_directions+1):
-#                            krylov_basis_copy[krylov_idx] += krylov_basis[projection_idx] * projection_matrix[projection_idx][krylov_idx]
-#                    print "Amount of memory in use after creating krylov copy is", gnp.memory_in_use(True), "MB"
-#                    del krylov_basis
-#                    krylov_basis = krylov_basis_copy
-#                    del krylov_basis_copy
-#                    gnp.free_reuse_cache(False)
-#                    print "Amount of memory in use after deleting krylov copy", gnp.memory_in_use(True), "MB"
-                    
-                    eigenvalues, eigenvectors = np.linalg.eig(krylov_basis['hessian'])
-                    eigenvalues = np.abs(eigenvalues)
-                    np.clip(eigenvalues, np.max(eigenvalues) * self.krylov_eigenvalue_floor_const, float("Inf"), out=eigenvalues)
-                    inv_hessian_cond = np.dot(np.dot(eigenvectors, np.diag(1./eigenvalues)),np.transpose(eigenvectors))
-                    inv_chol_factor = sl.cholesky(inv_hessian_cond) #numpy version gives lower triangular, scipy gives ut
-                    for basis_num in range(self.krylov_num_directions+1):
-                        krylov_basis[basis_num] *= inv_chol_factor[basis_num][basis_num]
-                        gnp.free_reuse_cache(False)
-                        for basis_mix_idx in range(basis_num+1,self.krylov_num_directions+1):
-                            krylov_basis[basis_num].add_mult(krylov_basis[basis_mix_idx], inv_chol_factor[basis_num][basis_mix_idx])
-#                            gnp.free_reuse_cache(False)
-                #some_grad = np.zeros(len(krylov_basis.keys())-1) #-1 for 'hessian' key
-                #print some_grad
-                #print some_grad.shape[0]
-                #for dim in range(some_grad.shape[0]):
-                #    some_grad[dim] = average_gradient.dot(krylov_basis[dim], excluded_keys) #check to see if GN matrix is PSD
-                #print some_grad
-                #sys.exit()
-                #print gnp.memory_in_use(True)
-                bfgs_batch_inputs = self.features[[bfgs_index]]
-                bfgs_batch_labels = self.labels[bfgs_index]
-                sys.stdout.write("\r                                                                \r")
-                sys.stdout.write("part 3/3: calculating mix of krylov basis using bfgs"), sys.stdout.flush()
-                #print gnp.memory_in_use(True)
-                step_size = self.bfgs(bfgs_batch_inputs, bfgs_batch_labels, krylov_basis, self.krylov_num_bfgs_epochs)
-                del bfgs_batch_inputs
-                del bfgs_batch_labels
-                gnp.free_reuse_cache(False)
-                #step_size = sopt.fmin_bfgs(f=self.calculate_subspace_cross_entropy, x0=np.zeros(self.krylov_num_directions+1), 
-                #                           fprime=self.calculate_subspace_gradient, args=(krylov_basis, bfgs_batch_inputs, bfgs_batch_labels, self.model), 
-                #                           gtol=1E-5, norm=2, maxiter=self.krylov_num_bfgs_epochs)
-                
-                #print "returned step size is", step_size
-                direction = self.mix_basis_directions(krylov_basis, step_size, len(step_size), direction)
-#                direction = krylov_basis[0] * step_size[0]
-#                for basis in range(1,len(step_size)):
-#                    direction += krylov_basis[basis] * step_size[basis]
-                del krylov_basis
-                gnp.free_reuse_cache(False)
-                #print "printing direction statistics"
-                #direction.print_statistics()
-                #print "printing model statistics"
-                #self.model.print_statistics()
-                self.model += direction
-                prev_direction = copy.deepcopy(direction)
-                direction.clear()
-                batch_index += self.backprop_batch_size
-                cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
-                #print "Amount of memory in use is", gnp.memory_in_use(True), "MB"
-                print "cross-entropy at the end of the epoch is", cross_entropy
-                if self.l2_regularization_const > 0.0:
-                    print "regularized loss is", loss
-                print "number correctly classified is", num_correct, "of", num_examples
-                
-            #sub_batch_start_perc = (sub_batch_start_perc + 1.0 / self.krylov_num_batch_splits) % 1 #not sure if this is better, below line is what I used to get krylov results
-            sub_batch_start_perc = (sub_batch_start_perc + 2.0 / self.krylov_num_batch_splits) % 1
+            current_frame = 0
+
+            while current_frame < self.num_training_examples: #run through the batches
+                end_frame, chunk_size, permutation_vector = self.read_feature_chunk(current_frame, num_chunk_frames, shuffle=True)
+                batch_labels = self.shuffle_labels(self.labels[current_frame:end_frame], permutation_vector)
+                batch_index = 0
+                end_index = 0
+                while end_index < chunk_size:
+                    per_done = float(current_frame + batch_index) / self.num_training_examples * 100
+                    sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
+                    end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
+                    batch_size = end_index - batch_index
+                    if batch_size < self.backprop_batch_size:
+                        break
+                    self.krylov_subspace_descent_batch(self.features[batch_index:end_index], batch_labels[batch_index:end_index], 
+                                                       self.model, direction, prev_direction, average_gradient, preconditioner)
+                    batch_index += self.backprop_batch_size
+                current_frame = end_frame
+            sys.stdout.write("\r100.0% done \r"), sys.stdout.flush()
             cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
-            
-#            print "cross-entropy at the end of the epoch is", cross_entropy
-#            if self.l2_regularization_const > 0.0:
-#                print "regularized loss is", loss
-#            print "number correctly classified is", num_correct, "of", num_examples
+            #print "Amount of memory in use is", gnp.memory_in_use(True), "MB"
+            print "cross-entropy at the end of the epoch is", cross_entropy
+            if self.l2_regularization_const > 0.0:
+                print "regularized loss is", loss
+            print "number correctly classified is", num_correct, "of", num_examples
+
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)])) 
     #===========================================================================
@@ -1689,8 +1633,6 @@ class NN_Trainer(Neural_Network):
             hidden_deriv = self.pearlmutter_forward_pass(labels, hiddens, model, direction, stop_at='loss') #nbatch x nout
             weight_vec = hiddens[model.num_layers]
             gnp.update_by_row_scalar(weight_vec, gnp.garray(labels.reshape(1, labels.size)), -1.0, weight_vec)
-#            for index in range(batch_size):
-#                weight_vec[index, int(labels[index])] -= 1 
             weight_vec *= hidden_deriv[model.num_layers+1][:, gnp.newaxis]
             second_order_direction = self.backward_pass(weight_vec, hiddens, model)
             del weight_vec
@@ -1846,14 +1788,10 @@ class NN_Trainer(Neural_Network):
             weight_cur_layer = ''.join([str(layer_num), str(layer_num+1)])
             bias_cur_layer = str(layer_num+1)
             #print "Amount of memory before nasty hidden_deriv calculation is", gnp.memory_in_use(True), "MB"
-            hidden_deriv[layer_num+1] = ((self.weight_matrix_multiply(hiddens[layer_num], direction.weights[weight_cur_layer], 
-                                                                      direction.bias[bias_cur_layer]) +
-                                          gnp.dot(hidden_deriv[layer_num], model.weights[weight_cur_layer])) *
-                                          hiddens[layer_num+1] * (1-hiddens[layer_num+1]) )
-#            hidden_deriv[layer_num+1] = self.weight_matrix_multiply(hiddens[layer_num], direction.weights[weight_cur_layer], 
-#                                                                    direction.bias[bias_cur_layer])
-#            gnp.gemm_update(hidden_deriv[layer_num], model.weights[weight_cur_layer], 1.0, hidden_deriv[layer_num+1], 1.0)
-#            gnp.update_by_dsigmoid(hiddens[layer_num+1], hidden_deriv[layer_num+1])
+            hidden_deriv[layer_num+1] = self.weight_matrix_multiply(hiddens[layer_num], direction.weights[weight_cur_layer], 
+                                                                    direction.bias[bias_cur_layer])
+            gnp.gemm_update(hidden_deriv[layer_num], model.weights[weight_cur_layer], 1.0, hidden_deriv[layer_num+1], 1.0)
+            gnp.update_by_dsigmoid(hiddens[layer_num+1], hidden_deriv[layer_num+1])
             #print "Amount of memory after nasty hidden_deriv calculation is", gnp.memory_in_use(True), "MB"
 #            gnp.free_reuse_cache(False)
             #print "Amount of memory after nasty hidden_deriv calculation (cache freed) is", gnp.memory_in_use(True), "MB"
@@ -1861,12 +1799,12 @@ class NN_Trainer(Neural_Network):
         
         weight_cur_layer = ''.join([str(model.num_layers-1), str(model.num_layers)])
         bias_cur_layer = str(model.num_layers)
-        linear_layer = (self.weight_matrix_multiply(hiddens[model.num_layers-1], direction.weights[weight_cur_layer], 
-                                                    direction.bias[bias_cur_layer]) +
-                        gnp.dot(hidden_deriv[model.num_layers-1], model.weights[weight_cur_layer]))
-#        linear_layer = self.weight_matrix_multiply(hiddens[model.num_layers-1], direction.weights[weight_cur_layer], 
-#                                                   direction.bias[bias_cur_layer])
-#        gnp.gemm_update(hidden_deriv[model.num_layers-1], model.weights[weight_cur_layer], 1.0, linear_layer, 1.0)
+#        linear_layer = (self.weight_matrix_multiply(hiddens[model.num_layers-1], direction.weights[weight_cur_layer], 
+#                                                    direction.bias[bias_cur_layer]) +
+#                        gnp.dot(hidden_deriv[model.num_layers-1], model.weights[weight_cur_layer]))
+        linear_layer = self.weight_matrix_multiply(hiddens[model.num_layers-1], direction.weights[weight_cur_layer], 
+                                                   direction.bias[bias_cur_layer])
+        gnp.gemm_update(hidden_deriv[model.num_layers-1], model.weights[weight_cur_layer], 1.0, linear_layer, 1.0)
 #        gnp.free_reuse_cache(False)
         if stop_at == 'linear':
             hidden_deriv[model.num_layers] = linear_layer
@@ -2033,7 +1971,7 @@ class NN_Trainer(Neural_Network):
     # Krylov Subspace Helper Methods
     #===========================================================================
     
-    def krylov_subspace_descent_batch(self, batch_inputs, batch_labels, model, direction, prev_direction, average_gradient = None):
+    def krylov_subspace_descent_batch(self, batch_inputs, batch_labels, model, direction, prev_direction, average_gradient = None, preconditioner = None):
         """
         assumed that samples are randomized
         """
@@ -2307,9 +2245,50 @@ class NN_Trainer(Neural_Network):
     #===========================================================================
     # Truncated Newton Methods
     #===========================================================================
+    def truncated_newton_batch(self, batch_inputs, batch_labels, model, damping_factor, gradient = None, 
+                               init_search_direction = None, preconditioner = None, model_update = None):
+        batch_size = batch_inputs.shape[0]
+        excluded_keys = {'bias':['0'], 'weights':[]} 
+        sys.stdout.write("\r                                                                \r") #clear line
+        sys.stdout.write("\rcalculating gradient\r"), sys.stdout.flush()
+#                print "Amount of memory before gradient calculation in use is", gnp.memory_in_use(True), "MB"
+        gradient = self.calculate_gradient(batch_inputs, batch_labels, check_gradient=False, model=model, gradient_weights = gradient)
+#                print "Amount of memory after gradient calculation in use is", gnp.memory_in_use(True), "MB"
+        old_loss = self.calculate_loss(batch_inputs, batch_labels, model=model) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
+#                print "Amount of memory after calculate_loss calculation in use is", gnp.memory_in_use(True), "MB"
+        if self.use_fisher_preconditioner:
+            sys.stdout.write("\r                                                                \r")
+            sys.stdout.write("calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
+            
+            preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, model, l2_regularization_const = 0.0)
+            # add regularization
+            #preconditioner = preconditioner + alpha / preconditioner.size(excluded_keys) * model.norm(excluded_keys) ** 2
+            preconditioner = (preconditioner + self.l2_regularization_const + damping_factor) ** (3./4.)
+            preconditioner = preconditioner.clip(preconditioner.max(excluded_keys) * self.fisher_preconditioner_floor_val, float("Inf"))
+#                print "Amount of memory before conjugate_gradient calculation in use is", gnp.memory_in_use(True), "MB"
+        model_update, model_vals = self.conjugate_gradient(batch_inputs, batch_labels, self.truncated_newton_num_cg_epochs, model=model, 
+                                                           damping_factor=damping_factor, preconditioner=preconditioner, gradient=gradient, 
+                                                           second_order_type=self.second_order_matrix, init_search_direction=init_search_direction,
+                                                           verbose = False, hiddens = None, model_update = model_update)
+#                print "Amount of memory after conjugate_gradient calculation in use is", gnp.memory_in_use(True), "MB"
+        model_den = model_vals[-1] #- model_vals[0]
+        
+        model.add_mult(model_update, 1.0)
+#                gnp.free_reuse_cache(False)
+        new_loss = self.calculate_loss(batch_inputs, batch_labels, model=model)  #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
+        model_num = (new_loss - old_loss) / batch_size
+        sys.stdout.write("\r                                                                      \r") #clear line
+        print "model ratio is", model_num / model_den,
+        if model_num / model_den < 0.25:
+            damping_factor *= 1.5
+        elif model_num / model_den > 0.75:
+            damping_factor *= 2./3.
+            
+        return damping_factor
+            
     def conjugate_gradient(self, batch_inputs, batch_labels, num_epochs, model = None, damping_factor = 0.0, #seems to be correct, compare with conjugate_gradient.py
                            verbose = False, preconditioner = None, gradient = None, second_order_type='gauss-newton', 
-                           init_search_direction = None, hiddens = None):
+                           init_search_direction = None, hiddens = None, model_update = None):
         #minimizes function q_x(p) = \grad_x f(x)' p + 1/2 * p'Gp (where x is fixed) use linear conjugate gradient
         if verbose:
             print "preconditioner is", preconditioner
@@ -2322,9 +2301,9 @@ class NN_Trainer(Neural_Network):
         min_gap = 10
         #max_test_gap = int(np.max([np.ceil(gap_ratio * num_epochs), min_gap]) + 1)
         model_vals = list()
-        
-        model_update = Neural_Network_Weight(num_layers=model.num_layers)
-        model_update.init_zero_weights(model.get_architecture(), last_layer_logistic=True, verbose=False)
+        if model_update is None:
+            model_update = Neural_Network_Weight(num_layers=model.num_layers)
+            model_update.init_zero_weights(model.get_architecture(), last_layer_logistic=True, verbose=False)
         
 #        batch_size = batch_inputs.shape[0]
         clean_hiddens_flag = False

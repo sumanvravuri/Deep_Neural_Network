@@ -371,7 +371,11 @@ class Neural_Network_Weight(object):
         else:
             print output_name, "successfully saved"
             del weight_dict
-            
+    def assign_weights(self, assignor_weights):
+        for key in self.weights:
+            self.weights[key][...] = assignor_weights.weights[key]
+        for key in self.bias:
+            self.bias[key][...] = assignor_weights.bias[key] 
     def __neg__(self):
         nn_output = Neural_Network_Weight(self.num_layers) #copy.deepcopy(self.model) * 0
         nn_output.init_zero_weights(self.get_architecture(), last_layer_logistic = (self.weight_type[''.join([str(self.num_layers-1),str(self.num_layers)])] == 'logistic'))
@@ -564,7 +568,7 @@ class Neural_Network(object, Vector_Math):
                                'truncated_newton_num_cg_epochs', 'truncated_newton_init_damping_factor',
                                'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix',
                                'krylov_use_hessian_preconditioner', 'krylov_eigenvalue_floor_const', 
-                               'fisher_preconditioner_floor_val', 'use_fisher_preconditioner', 'max_gpu_memory_usage']
+                               'fisher_preconditioner_floor_val', 'use_fisher_preconditioner', 'max_gpu_memory_usage', 'training_seed']
         self.required_variables['test'] =  ['mode', 'feature_file_name', 'weight_matrix_name', 'output_name', 'context_window']
         self.all_variables['test'] =  self.required_variables['test'] + ['label_file_name', 'max_gpu_memory_usage']
         
@@ -649,7 +653,7 @@ class Neural_Network(object, Vector_Math):
             print "Unable to open ", self.feature_file_name, "... Exiting now"
             sys.exit()
     
-    def read_feature_chunk(self, current_frame, num_frames, shuffle = False, features = None, verbose = True):
+    def read_feature_chunk(self, current_frame, num_frames, shuffle = False, features = None, verbose = True, shuffle_seed = 0):
         """returns feature chunk of num_frames with correct context
         windowing
         only returns full sequence lengths less than num_frames asked
@@ -674,9 +678,10 @@ class Neural_Network(object, Vector_Math):
             new_data = data
         if shuffle:
             permutation_vector = np.arange(chunk_size)
-            unison_shuffle(new_data, permutation_vector)
+            unison_shuffle(new_data, permutation_vector, shuffle_seed)
         del data, frame, label, frame_table, start_sentence, end_sentence
         if verbose:
+            print "\r                                                                \r",
             print "copying %d frames to GPU" % new_data.shape[0]
         features[:new_data.shape[0], :] = new_data
         del new_data
@@ -937,6 +942,7 @@ class NN_Trainer(Neural_Network):
         old_settings = np.seterr(over='raise',under='raise',invalid='raise')
         
         self.mode = 'train'
+        self.training_seed = self.default_variable_define(config_dictionary, 'training_seed', arg_type='float', default_value=0)
         super(NN_Trainer,self).__init__(config_dictionary)
         self.num_training_examples = self.frame_table[-1]
         self.check_keys(config_dictionary)
@@ -967,7 +973,8 @@ class NN_Trainer(Neural_Network):
             self.initial_bias_max = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=-2.2)
             self.initial_bias_min = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=-2.4)
             self.model.init_random_weights(architecture, self.initial_bias_max, self.initial_bias_min, 
-                                           self.initial_weight_min, self.initial_weight_max, last_layer_logistic=hasattr(self,'labels'))
+                                           self.initial_weight_min, self.initial_weight_max, last_layer_logistic=hasattr(self,'labels'),
+                                           seed = self.training_seed)
             del architecture #we have it in the model
         #
 #        print "Amount of memory in use before reading weights file is", gnp.memory_in_use(True), "MB"
@@ -1070,35 +1077,6 @@ class NN_Trainer(Neural_Network):
     #===========================================================================
     # forward pass methods
     #===========================================================================
-    def old_calculate_classification_statistics(self, features, labels, model=None):
-        if model == None:
-            model = self.model
-        
-        excluded_keys = {'bias': ['0'], 'weights': []}
-        if self.do_backprop == False:
-            classification_batch_size = 8192
-        else:
-            classification_batch_size = max(self.backprop_batch_size, 8192)
-        
-        batch_index = 0
-        end_index = 0
-        cross_entropy = 0.0
-        num_correct = 0
-        num_examples = features.shape[0]
-        while end_index < num_examples: #run through the batches
-            end_index = min(batch_index+classification_batch_size, num_examples)
-            output = self.forward_pass(features[batch_index:end_index], verbose=False, model=model)
-            cross_entropy += self.calculate_cross_entropy(output, labels[batch_index:end_index])
-            
-            #don't use calculate_classification_accuracy() because of possible rounding error
-            prediction = output.argmax(axis=1).reshape(labels[batch_index:end_index].shape)
-            num_correct += np.sum(prediction == labels[batch_index:end_index])
-            batch_index += classification_batch_size
-        
-        loss = cross_entropy
-        if self.l2_regularization_const > 0.0:
-            loss += (model.norm(excluded_keys) ** 2) * self.l2_regularization_const
-        return cross_entropy, num_correct, num_examples, loss
     
     def calculate_classification_statistics(self, frame_table, labels, model=None):
         if model == None:
@@ -1400,14 +1378,14 @@ class NN_Trainer(Neural_Network):
             current_frame = 0
 
             while current_frame < self.num_training_examples: #run through the batches
-                end_frame, chunk_size, permutation_vector = self.read_feature_chunk(current_frame, num_chunk_frames, shuffle=True)
+                end_frame, chunk_size, permutation_vector = self.read_feature_chunk(current_frame, num_chunk_frames, shuffle=True, shuffle_seed=epoch_num) #ensures that each epoch will include a different order
                 batch_labels = self.shuffle_labels(self.labels[current_frame:end_frame], permutation_vector)
                 batch_index = 0
                 end_index = 0
                 while end_index < chunk_size:
                     per_done = float(current_frame + batch_index) / self.num_training_examples * 100
                     sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
-                    end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
+                    end_index = min(batch_index+self.backprop_batch_size, chunk_size)
                     batch_size = end_index - batch_index
                     self.steepest_descent_batch(self.features[batch_index:end_index], gnp.garray(batch_labels[batch_index:end_index].reshape((1, batch_size))), 
                                                 self.model, learning_rate, l2_regularization_const = self.l2_regularization_const)
@@ -1427,6 +1405,7 @@ class NN_Trainer(Neural_Network):
     def backprop_truncated_newton(self):
         print "Starting backprop using truncated newton"
         num_feature_chunks = self.num_frames_buf / self.backprop_batch_size
+        print num_feature_chunks
         num_chunk_frames = num_feature_chunks * self.backprop_batch_size
         self.memory_management('truncated_newton', True, num_feature_chunks, False)
         
@@ -1440,29 +1419,33 @@ class NN_Trainer(Neural_Network):
         damping_factor = self.truncated_newton_init_damping_factor
         gradient = Neural_Network_Weight(self.model.num_layers)
         gradient.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
-        preconditioner = None
-        model_update = None
-        
+        model_update = Neural_Network_Weight(self.model.num_layers)
+        model_update.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
+        init_search_direction = Neural_Network_Weight(self.model.num_layers)
+        init_search_direction.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
         
         for epoch_num in range(self.num_epochs):
             print "Epoch", epoch_num + 1, "of", self.num_epochs
             current_frame = 0
 
             while current_frame < self.num_training_examples: #run through the batches
-                end_frame, chunk_size, permutation_vector = self.read_feature_chunk(current_frame, num_chunk_frames, shuffle=True)
+                end_frame, chunk_size, permutation_vector = self.read_feature_chunk(current_frame, num_chunk_frames, shuffle=True, shuffle_seed=epoch_num) #ensures that each epoch will include a different order
                 batch_labels = self.shuffle_labels(self.labels[current_frame:end_frame], permutation_vector)
+#                end_frame, chunk_size = self.read_feature_chunk(current_frame, num_chunk_frames, shuffle=False)
+#                batch_labels = self.labels[current_frame:end_frame]
                 batch_index = 0
                 end_index = 0
                 while end_index < chunk_size:
                     per_done = float(current_frame + batch_index) / self.num_training_examples * 100
                     sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
-                    end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
+                    end_index = min(batch_index+self.backprop_batch_size, chunk_size)
                     batch_size = end_index - batch_index
                     if batch_size < self.backprop_batch_size:
                         break
-                    self.truncated_newton_batch(self.features[batch_index:end_index], batch_labels[batch_index:end_index], 
-                                                self.model, damping_factor, gradient = None, 
-                                                init_search_direction = None, preconditioner = None, model_update = None)
+                    model_update, damping_factor = self.truncated_newton_batch(self.features[batch_index:end_index], batch_labels[batch_index:end_index], 
+                                                                               self.model, damping_factor, gradient = gradient, 
+                                                                               init_search_direction = init_search_direction, model_update = model_update)
+                    
                     batch_index += self.backprop_batch_size
                 current_frame = end_frame
             sys.stdout.write("\r100.0% done \r"), sys.stdout.flush()
@@ -1474,45 +1457,7 @@ class NN_Trainer(Neural_Network):
             print "number correctly classified is", num_correct, "of", num_examples
 
             if self.save_each_epoch:
-                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)])) 
-        
-        
-#        end_frame, chunk_size = self.read_feature_chunk(0, 60000, shuffle=False)
-#        for epoch_num in range(self.num_epochs):
-##            print "Amount of memory at the beginning of the epoch in use is", gnp.memory_in_use(True), "MB"
-#            print "Epoch", epoch_num+1, "of", self.num_epochs
-#            batch_index = 0
-#            end_index = 0
-#            
-#            while end_index < self.num_training_examples: #run through the batches
-#                per_done = float(batch_index)/self.num_training_examples*100
-#                sys.stdout.write("\r                                                                \r") #clear line
-#                sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
-#                sys.stdout.write("\r                                                                \r") #clear line
-#                sys.stdout.write("\rdamping factor is %f\r" % damping_factor), sys.stdout.flush()
-#                end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
-#                print "\nto end index", end_index
-#                batch_inputs = self.features[batch_index:end_index]
-#                batch_labels = self.labels[batch_index:end_index]
-#                batch_size = batch_inputs.shape[0]
-#                
-#                
-#                batch_index += self.backprop_batch_size
-#                print "damping factor is", damping_factor
-#                cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
-#                print "cross-entropy at the end of the batch is", cross_entropy
-#                if self.l2_regularization_const > 0.0:
-#                    print "regularized loss is", loss
-#                print "number correctly classified is", num_correct, "of", num_examples
-#                
-#            sys.stdout.write("\r100.0% done \r")
-##            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
-##            print "cross-entropy at the end of the epoch is", cross_entropy
-##            if self.l2_regularization_const > 0.0:
-##                print "regularized loss is", loss
-##            print "number correctly classified is", num_correct, "of", num_examples
-#            if self.save_each_epoch:
-#                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
+                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
 
     def backprop_krylov_subspace(self):
         #does backprop using krylov subspace
@@ -1550,14 +1495,14 @@ class NN_Trainer(Neural_Network):
             current_frame = 0
 
             while current_frame < self.num_training_examples: #run through the batches
-                end_frame, chunk_size, permutation_vector = self.read_feature_chunk(current_frame, num_chunk_frames, shuffle=True)
+                end_frame, chunk_size, permutation_vector = self.read_feature_chunk(current_frame, num_chunk_frames, shuffle=True, shuffle_seed=epoch_num) #ensures that each epoch will include a different order
                 batch_labels = self.shuffle_labels(self.labels[current_frame:end_frame], permutation_vector)
                 batch_index = 0
                 end_index = 0
                 while end_index < chunk_size:
                     per_done = float(current_frame + batch_index) / self.num_training_examples * 100
                     sys.stdout.write("\r%.1f%% done " % per_done), sys.stdout.flush()
-                    end_index = min(batch_index+self.backprop_batch_size,self.num_training_examples)
+                    end_index = min(batch_index+self.backprop_batch_size, chunk_size)
                     batch_size = end_index - batch_index
                     if batch_size < self.backprop_batch_size:
                         break
@@ -2027,9 +1972,9 @@ class NN_Trainer(Neural_Network):
         #print gnp.memory_in_use(True)
         step_size = self.bfgs(bfgs_batch_inputs, bfgs_batch_labels, krylov_basis, self.krylov_num_bfgs_epochs)
 
-        #step_size = sopt.fmin_bfgs(f=self.calculate_subspace_cross_entropy, x0=np.zeros(self.krylov_num_directions+1), 
-        #                           fprime=self.calculate_subspace_gradient, args=(krylov_basis, bfgs_batch_inputs, bfgs_batch_labels, self.model), 
-        #                           gtol=1E-5, norm=2, maxiter=self.krylov_num_bfgs_epochs)
+#        step_size = sopt.fmin_bfgs(f=self.calculate_subspace_cross_entropy, x0=np.zeros(self.krylov_num_directions+1), 
+#                                   fprime=self.calculate_subspace_gradient, args=(krylov_basis, bfgs_batch_inputs, bfgs_batch_labels, self.model), 
+#                                   gtol=1E-5, norm=2, maxiter=self.krylov_num_bfgs_epochs)
         
         direction = self.mix_basis_directions(krylov_basis, step_size, len(step_size), direction)
         self.model.add_mult(direction, 1.0)
@@ -2100,7 +2045,7 @@ class NN_Trainer(Neural_Network):
                 krylov_basis['hessian'][self.krylov_num_directions,hessian_idx] = krylov_basis['hessian'][hessian_idx,self.krylov_num_directions]
         return krylov_basis
     
-    def bfgs(self, batch_inputs, batch_labels, basis, num_epochs, model = None, verbose = False): #compared with scipy implementation, looks great, need to add gradient termination condition
+    def bfgs(self, batch_inputs, batch_labels, basis, num_epochs, model = None, verbose = False, safe_mode = True): #compared with scipy implementation, looks great, need to add gradient termination condition
         """helper function for Krylov subspace methods
         given a basis of n directions B, bfgs attempts
         to find the optimal step size a (which is an element of R^n)
@@ -2118,20 +2063,23 @@ class NN_Trainer(Neural_Network):
         identity_mat = np.identity(num_directions)
             
         cur_step = np.zeros(num_directions)
+        prev_step = np.zeros(num_directions)
         bfgs_mat = np.identity(num_directions)
-        
+        Hk = np.zeros(bfgs_mat.shape)
+        HkT = np.zeros(bfgs_mat.shape)
         init_step_size = 1.0
         model_update = Neural_Network_Weight(model.num_layers)
         model_update.init_zero_weights(model.get_architecture(), last_layer_logistic=True)
         model_direction = Neural_Network_Weight(model.num_layers)
         model_direction.init_zero_weights(model.get_architecture(), last_layer_logistic=True)
         subspace_cur_gradient = self.calculate_subspace_gradient(cur_step, basis, batch_inputs, batch_labels, model)
-        
+        subspace_prev_gradient = np.zeros(subspace_cur_gradient.shape)
+        subspace_direction = np.zeros(subspace_cur_gradient.shape)
         
         for epoch in range(num_epochs):
             print "\r                                                                \r", #clear line
             sys.stdout.write("\rbfgs epoch %d of %d\r" % (epoch+1, num_epochs)), sys.stdout.flush()
-            subspace_direction = -np.dot(bfgs_mat, subspace_cur_gradient)
+            subspace_direction = -np.dot(bfgs_mat, subspace_cur_gradient, out = subspace_direction)
             model_direction = self.mix_basis_directions(basis, subspace_direction, num_directions, model_direction)
 #            step = self.line_search(batch_inputs, batch_labels, model_direction, max_step_size=1.5, 
 #                                    max_line_searches=self.num_line_searches, init_step_size=init_step_size, 
@@ -2146,11 +2094,11 @@ class NN_Trainer(Neural_Network):
                 print "\rline search failed, returning current step\r", #not updating any parameters"
                 return cur_step
             else:
-                prev_step = copy.deepcopy(cur_step)
+                prev_step[...] = cur_step
                 cur_step += subspace_direction * step
             #print "Amount of memory at the beginning of the model_update calculation is", gnp.memory_in_use(True), "MB"
             model_update = self.mix_basis_directions(basis, cur_step, num_directions, model_update)
-            subspace_prev_gradient = copy.deepcopy(subspace_cur_gradient)
+            subspace_prev_gradient[...] = subspace_cur_gradient
             #print "Amount of memory before subspace_gradient calculation is", gnp.memory_in_use(True), "MB"
             subspace_cur_gradient = self.calculate_subspace_gradient(cur_step, basis, batch_inputs, batch_labels, model)
             #print "Amount of memory after subspace_gradient calculation is", gnp.memory_in_use(True), "MB"
@@ -2163,16 +2111,24 @@ class NN_Trainer(Neural_Network):
             
             step_condition = cur_step - prev_step
             grad_condition = subspace_cur_gradient - subspace_prev_gradient
-            curvature_condition = np.dot(step_condition, grad_condition)
-            bfgs_mat = (np.dot((identity_mat - np.outer(step_condition, grad_condition.T) / curvature_condition), 
-                                np.dot(bfgs_mat, (identity_mat - np.outer(grad_condition, step_condition.T) / curvature_condition)))
-                                + np.outer(step_condition, step_condition.T) / curvature_condition)
-            U,s,V = np.linalg.svd(bfgs_mat)
-            #print "singular values of bfgs matrix are", s
-            condition_number = max(s) / min(s)
-            if condition_number > 30000.0:
-                print "condition number of bfgs matrix is too high:", condition_number, "so returning current step\r"
-                break
+            curvature_condition = np.vdot(step_condition, grad_condition)
+#            HkT[...] = identity_mat - np.outer(step_condition, grad_condition) / curvature_condition
+##            HkT /= curvature_condition
+#            Hk[...] =  identity_mat - np.outer(grad_condition, step_condition) / curvature_condition
+##            Hk /= curvature_condition
+#            bfgs_mat = np.dot(bfgs_mat, Hk, out = bfgs_mat)
+#            bfgs_mat = np.dot(HkT, bfgs_mat, out = bfgs_mat)
+#            bfgs_mat += np.outer(step_condition, step_condition) / curvature_condition
+            bfgs_mat = (np.dot((identity_mat - np.outer(step_condition, grad_condition) / curvature_condition), 
+                                np.dot(bfgs_mat, (identity_mat - np.outer(grad_condition, step_condition) / curvature_condition)))
+                                + np.outer(step_condition, step_condition) / curvature_condition)
+            if safe_mode: #calculates svd to see if bfgs matrix is too ill-conditioned
+                U,s,V = np.linalg.svd(bfgs_mat)
+                #print "singular values of bfgs matrix are", s
+                condition_number = max(s) / min(s)
+                if condition_number > 32768.0: #16-bits lost in precision, which means that the models will be pretty crappy, so stop there
+                    print "condition number of bfgs matrix is too high:", condition_number, "so returning current step\r"
+                    break
         #clean up
         del bfgs_mat
         del identity_mat
@@ -2246,16 +2202,18 @@ class NN_Trainer(Neural_Network):
     # Truncated Newton Methods
     #===========================================================================
     def truncated_newton_batch(self, batch_inputs, batch_labels, model, damping_factor, gradient = None, 
-                               init_search_direction = None, preconditioner = None, model_update = None):
+                               init_search_direction = None, model_update = None, verbose = False):
         batch_size = batch_inputs.shape[0]
         excluded_keys = {'bias':['0'], 'weights':[]} 
         sys.stdout.write("\r                                                                \r") #clear line
         sys.stdout.write("\rcalculating gradient\r"), sys.stdout.flush()
-#                print "Amount of memory before gradient calculation in use is", gnp.memory_in_use(True), "MB"
-        gradient = self.calculate_gradient(batch_inputs, batch_labels, check_gradient=False, model=model, gradient_weights = gradient)
-#                print "Amount of memory after gradient calculation in use is", gnp.memory_in_use(True), "MB"
-        old_loss = self.calculate_loss(batch_inputs, batch_labels, model=model) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
-#                print "Amount of memory after calculate_loss calculation in use is", gnp.memory_in_use(True), "MB"
+#       print "Amount of memory before gradient calculation in use is", gnp.memory_in_use(True), "MB"
+        gradient = self.calculate_gradient(batch_inputs, batch_labels, check_gradient = False, model = model, 
+                                           gradient_weights = gradient)
+        preconditioner = None
+#       print "Amount of memory after gradient calculation in use is", gnp.memory_in_use(True), "MB"
+        old_loss = self.calculate_loss(batch_inputs, batch_labels, model = model) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
+#       print "Amount of memory after calculate_loss calculation in use is", gnp.memory_in_use(True), "MB"
         if self.use_fisher_preconditioner:
             sys.stdout.write("\r                                                                \r")
             sys.stdout.write("calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
@@ -2270,21 +2228,22 @@ class NN_Trainer(Neural_Network):
                                                            damping_factor=damping_factor, preconditioner=preconditioner, gradient=gradient, 
                                                            second_order_type=self.second_order_matrix, init_search_direction=init_search_direction,
                                                            verbose = False, hiddens = None, model_update = model_update)
-#                print "Amount of memory after conjugate_gradient calculation in use is", gnp.memory_in_use(True), "MB"
+#       print "Amount of memory after conjugate_gradient calculation in use is", gnp.memory_in_use(True), "MB"
         model_den = model_vals[-1] #- model_vals[0]
         
         model.add_mult(model_update, 1.0)
 #                gnp.free_reuse_cache(False)
         new_loss = self.calculate_loss(batch_inputs, batch_labels, model=model)  #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
         model_num = (new_loss - old_loss) / batch_size
-        sys.stdout.write("\r                                                                      \r") #clear line
-        print "model ratio is", model_num / model_den,
+        if verbose:
+            sys.stdout.write("\r                                                                      \r") #clear line
+            print "model ratio is", model_num / model_den,
         if model_num / model_den < 0.25:
             damping_factor *= 1.5
         elif model_num / model_den > 0.75:
             damping_factor *= 2./3.
             
-        return damping_factor
+        return model_update, damping_factor
             
     def conjugate_gradient(self, batch_inputs, batch_labels, num_epochs, model = None, damping_factor = 0.0, #seems to be correct, compare with conjugate_gradient.py
                            verbose = False, preconditioner = None, gradient = None, second_order_type='gauss-newton', 
@@ -2301,9 +2260,14 @@ class NN_Trainer(Neural_Network):
         min_gap = 10
         #max_test_gap = int(np.max([np.ceil(gap_ratio * num_epochs), min_gap]) + 1)
         model_vals = list()
+        
         if model_update is None:
             model_update = Neural_Network_Weight(num_layers=model.num_layers)
             model_update.init_zero_weights(model.get_architecture(), last_layer_logistic=True, verbose=False)
+        residual = Neural_Network_Weight(num_layers=model.num_layers)
+        residual.init_zero_weights(model.get_architecture(), last_layer_logistic=True, verbose=False)
+        preconditioned_residual = Neural_Network_Weight(num_layers=model.num_layers)
+        preconditioned_residual.init_zero_weights(model.get_architecture(), last_layer_logistic=True, verbose=False)
         
 #        batch_size = batch_inputs.shape[0]
         clean_hiddens_flag = False
@@ -2316,37 +2280,37 @@ class NN_Trainer(Neural_Network):
             clean_gradient_flag = True
             gradient = self.calculate_gradient(batch_inputs, batch_labels, False, model = model, hiddens = hiddens)
         
-        if init_search_direction == None:
+        residual.assign_weights(gradient) 
+        if init_search_direction is None:
             model_vals.append(0)
-            residual = gradient 
         else:
             second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, init_search_direction, 
                                                                            model, second_order_type=second_order_type, hiddens = hiddens)
-            residual = gradient + second_order_direction
-#            model_val = 0.5 * init_search_direction.dot(gradient + residual, excluded_keys)
+            residual.add_mult(second_order_direction, 1.0) #residual = gradient + second_order_direction now
             model_val = 0.5 * (init_search_direction.dot(gradient, excluded_keys) + init_search_direction.dot(residual, excluded_keys))
             model_vals.append(model_val) 
-            model_update.add_mult(init_search_direction, 1.0)
+            model_update.assign_weights(init_search_direction)
 #            gnp.free_reuse_cache(False)
         if verbose:
             print "model val at end of epoch is", model_vals[-1]
         
+        preconditioned_residual.assign_weights(residual)
         if preconditioner != None:
-            preconditioned_residual = residual / preconditioner
-        else:
-            preconditioned_residual = residual
+            preconditioned_residual /= preconditioner
+
         search_direction = -preconditioned_residual
         residual_dot = residual.dot(preconditioned_residual, excluded_keys)
+        
+        
         for epoch in range(num_epochs):
             print "\r                                                                \r", #clear line
             sys.stdout.write("\rconjugate gradient epoch %d of %d\r" % (epoch+1, num_epochs)), sys.stdout.flush()
             
-            second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, search_direction, model, second_order_type=second_order_type, hiddens = hiddens)
+            second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, search_direction, model, 
+                                                                           second_order_type=second_order_type, hiddens = hiddens)
             if damping_factor > 0.0:
                 second_order_direction.add_mult(search_direction, damping_factor)
-#            else:
-#                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, search_direction, model, second_order_type=second_order_type, hiddens = hiddens)
-#            gnp.free_reuse_cache(False)                                                    
+                                                  
             curvature = search_direction.dot(second_order_direction,excluded_keys)
             if curvature <= 0:
                 print "curvature must be positive, but is instead", curvature, "returning current weights"
@@ -2362,7 +2326,6 @@ class NN_Trainer(Neural_Network):
 #            gnp.free_reuse_cache(False)
             residual.add_mult(second_order_direction, step_size)
 #            gnp.free_reuse_cache(False)
-#            model_val = 0.5 * model_update.dot(gradient + residual, excluded_keys)
             model_val = 0.5 * (model_update.dot(gradient, excluded_keys) + model_update.dot(residual, excluded_keys))
             model_vals.append(model_val)
             if verbose:
@@ -2371,13 +2334,15 @@ class NN_Trainer(Neural_Network):
             if epoch > test_gap: #checking termination condition
                 previous_model_val = model_vals[-test_gap]
                 if (previous_model_val - model_val) / model_val <= tolerance * test_gap and previous_model_val < 0:
-                    print "\r                                                                \r", #clear line
-                    sys.stdout.write("\rtermination condition satisfied for conjugate gradient, returning step\r"), sys.stdout.flush()
+                    if verbose:
+                        print "\r                                                                \r", #clear line
+                        sys.stdout.write("\rtermination condition satisfied for conjugate gradient, returning step\r"), sys.stdout.flush()
                     break
+            
+            preconditioned_residual.assign_weights(residual)
             if preconditioner != None:
-                preconditioned_residual = residual / preconditioner
-            else:
-                preconditioned_residual = residual
+                preconditioned_residual /= preconditioner
+
 #            gnp.free_reuse_cache(False)
             new_residual_dot = residual.dot(preconditioned_residual, excluded_keys)
             conjugate_gradient_const = new_residual_dot / residual_dot
@@ -2436,7 +2401,7 @@ class NN_Trainer(Neural_Network):
             gradient_batch_size = self.backprop_batch_size
             
             
-            total_features_size_MB = (bfgs_batch_size + krylov_batch_size + self.num_training_examples) * self.num_feature_dim * sample_size_MB
+            features_size_MB = self.backprop_batch_size * self.num_feature_dim * sample_size_MB
             architecture = self.model.get_architecture()
             num_total_hidden_units = sum(architecture[1:])
             total_hidden_units_size_MB = max([gradient_batch_size, krylov_batch_size * 2, bfgs_batch_size]) * num_total_hidden_units * sample_size_MB
@@ -2449,7 +2414,7 @@ class NN_Trainer(Neural_Network):
             gradient_calculation_size_MB = 3 * weight_size_MB + grad_features_size_MB + grad_hids_size_MB + max_grad_per_layer_update_MB
             # calculate amount of memory for krylov subspace calculation
             #baseline storage is gradient calculation + previous direction + model + features
-            baseline_krylov_subspace_memory_size_MB = 3 * weight_size_MB + self.num_training_examples * self.num_feature_dim * sample_size_MB
+            baseline_krylov_subspace_memory_size_MB = 3 * weight_size_MB + features_size_MB
             krylov_feats_size_MB = krylov_batch_size * self.num_feature_dim * sample_size_MB
             krylov_hids_size_MB =  krylov_batch_size * 2 * num_total_hidden_units * sample_size_MB #twice because of hiddens and hidden_deriv
             krylov_directions_size_MB = (self.krylov_num_directions + self.krylov_use_hessian_preconditioner) * weight_size_MB # add 1 if hessian precond
@@ -2465,24 +2430,18 @@ class NN_Trainer(Neural_Network):
             bfgs_hids_size_MB =  bfgs_batch_size * num_total_hidden_units * sample_size_MB
             line_search_model_size_MB = 4 * weight_size_MB + max_bfgs_per_layer_update_MB + bfgs_hids_size_MB #needs to be changed
             
-            total_memory_MB = max(max_per_layer_update_MB + total_weight_size_MB + total_features_size_MB + total_hidden_units_size_MB, gradient_calculation_size_MB)
+            total_memory_MB = max(max_per_layer_update_MB + total_weight_size_MB + features_size_MB + total_hidden_units_size_MB, gradient_calculation_size_MB)
             if total_memory_MB > self.max_gpu_memory_usage:
                 raise ValueError("Estimated amount of memory to be used in", train_method, "is", total_memory_MB, "MB. This is greater than maximum allotted GPU usage", self.max_gpu_memory_usage, ", please decrease backprop_batch_size")
             elif num_feature_chunks is None:
-                max_bfgs_batch_size = self.num_training_examples / self.krylov_num_batch_splits
-                max_krylov_batch_size = max_bfgs_batch_size
-                max_gradient_batch_size = self.num_training_examples
-                max_total_features_size_MB = (max_bfgs_batch_size + max_krylov_batch_size + max_gradient_batch_size) * self.num_feature_dim * sample_size_MB
-                non_feature_memory_MB = total_memory_MB - total_features_size_MB
+                max_features_size_MB = self.num_training_examples * self.num_feature_dim * sample_size_MB
+                non_feature_memory_MB = total_memory_MB - features_size_MB
                 extra_memory = self.max_gpu_memory_usage - non_feature_memory_MB
-                num_feature_chunks = int(extra_memory / total_features_size_MB)
-                total_memory_MB += min((num_feature_chunks-1) * total_features_size_MB, max_total_features_size_MB - total_features_size_MB)
+                num_feature_chunks = min(extra_memory / features_size_MB, int(np.ceil(float(self.num_training_examples) / self.backprop_batch_size)))
+                total_memory_MB += (num_feature_chunks-1) * features_size_MB
             else:
-                max_bfgs_batch_size = self.num_training_examples / self.krylov_num_batch_splits
-                max_krylov_batch_size = max_bfgs_batch_size
-                max_gradient_batch_size = self.num_training_examples
-                max_total_features_size_MB = (max_bfgs_batch_size + max_krylov_batch_size + max_gradient_batch_size) * self.num_feature_dim * sample_size_MB
-                total_memory_MB += min((num_feature_chunks-1) * total_features_size_MB, max_total_features_size_MB - total_features_size_MB)
+                max_features_size_MB = self.num_training_examples * self.num_feature_dim * sample_size_MB
+                total_memory_MB += min((num_feature_chunks-1) * features_size_MB, max_features_size_MB - features_size_MB)
                 if total_memory_MB > self.max_gpu_memory_usage:
                     raise ValueError("Estimated amount of memory to be used in", train_method, "is", total_memory_MB, "MB. This is greater than maximum allotted GPU usage", self.max_gpu_memory_usage, ", please decrease backprop_batch_size")
             if verbose:
@@ -2502,7 +2461,7 @@ class NN_Trainer(Neural_Network):
             architecture = self.model.get_architecture()
             num_total_hidden_units = sum(architecture[1:])
             total_weights_size_MB = num_weight_copies * weight_size_MB
-            features_size_MB = self.num_training_examples * self.num_feature_dim * sample_size_MB
+            features_size_MB = self.backprop_batch_size * self.num_feature_dim * sample_size_MB
             hids_size_MB = 2 * self.backprop_batch_size * num_total_hidden_units * sample_size_MB #1 for hiddens, 1 for hidden_deriv
             max_krylov_per_layer_update_MB = max(architecture) * (3 + 4 * (self.second_order_matrix == 'hessian')) * self.backprop_batch_size * sample_size_MB
 #            print "feature size is", features_size_MB
@@ -2516,8 +2475,8 @@ class NN_Trainer(Neural_Network):
                 max_features_size_MB = self.num_training_examples * self.num_feature_dim * sample_size_MB
                 non_feature_memory_MB = total_memory_MB - features_size_MB
                 extra_memory = self.max_gpu_memory_usage - non_feature_memory_MB
-                num_feature_chunks = int(extra_memory / features_size_MB)
-                total_memory_MB += min((num_feature_chunks-1) * features_size_MB, max_features_size_MB - features_size_MB)
+                num_feature_chunks = min(extra_memory / features_size_MB, int(np.ceil(float(self.num_training_examples) / self.backprop_batch_size)))
+                total_memory_MB += (num_feature_chunks-1) * features_size_MB
             else:
                 max_features_size_MB = self.num_training_examples * self.num_feature_dim * sample_size_MB
                 total_memory_MB += min((num_feature_chunks-1) * features_size_MB, max_features_size_MB - features_size_MB)
@@ -2933,7 +2892,7 @@ def init_arg_parser():
                                'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix',
                                'krylov_use_hessian_preconditioner', 'krylov_eigenvalue_floor_const', 
                                'fisher_preconditioner_floor_val', 'use_fisher_preconditioner', 'max_gpu_memory_usage']
-    required_variables['test'] =  ['feature_file_name', 'weight_matrix_name', 'output_name', 'context_window']
+    required_variables['test'] =  ['feature_file_name', 'weight_matrix_name', 'output_name', 'context_window', 'training_seed']
     all_variables['test'] =  required_variables['test'] + ['label_file_name', 'max_gpu_memory_usage']
     
     parser = argparse.ArgumentParser()

@@ -13,6 +13,7 @@ import scipy.optimize as sopt
 from context_window import context_window
 from unison_shuffle import unison_shuffle
 from read_pfile_v2 import *
+from write_pfile import *
 import math
 import copy
 import argparse
@@ -260,6 +261,7 @@ class Neural_Network_Weight(object):
     def init_zero_weights(self, architecture, last_layer_logistic=True, verbose=False):
         self.num_layers = len(architecture) - 1
         self.bias['0'] = gnp.zeros((1,architecture[0]))
+        self.num_layers = len(architecture) - 1
         
         for layer_num in range(1,self.num_layers+1):
             weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
@@ -556,7 +558,7 @@ class Neural_Network(object, Vector_Math):
         
         self.required_variables = dict()
         self.all_variables = dict()
-        self.required_variables['train'] = ['mode', 'feature_file_name', 'output_name', 'context_window']
+        self.required_variables['train'] = ['mode', 'feature_file_name', 'output_name']
         self.all_variables['train'] = self.required_variables['train'] + ['label_file_name', 'hiddens_structure', 'weight_matrix_name', 
                                'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 'save_each_epoch',
                                'do_pretrain', 'pretrain_method', 'pretrain_iterations', 
@@ -568,9 +570,10 @@ class Neural_Network(object, Vector_Math):
                                'truncated_newton_num_cg_epochs', 'truncated_newton_init_damping_factor',
                                'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix',
                                'krylov_use_hessian_preconditioner', 'krylov_eigenvalue_floor_const', 
-                               'fisher_preconditioner_floor_val', 'use_fisher_preconditioner', 'max_gpu_memory_usage', 'training_seed']
-        self.required_variables['test'] =  ['mode', 'feature_file_name', 'weight_matrix_name', 'output_name', 'context_window']
-        self.all_variables['test'] =  self.required_variables['test'] + ['label_file_name', 'max_gpu_memory_usage']
+                               'fisher_preconditioner_floor_val', 'use_fisher_preconditioner', 'max_gpu_memory_usage', 'training_seed',
+                               'context_window']
+        self.required_variables['test'] =  ['mode', 'feature_file_name', 'weight_matrix_name', 'output_name']
+        self.all_variables['test'] =  self.required_variables['test'] + ['label_file_name', 'max_gpu_memory_usage', 'classification_batch_size', 'context_window']
         
     def dump_config_vals(self):
         no_attr_key = list()
@@ -881,7 +884,11 @@ class NN_Tester(Neural_Network): #completed
         self.check_keys(config_dictionary)
         
         self.weight_matrix_name = self.default_variable_define(config_dictionary, 'weight_matrix_name', arg_type='string')
+        self.classification_batch_size = self.default_variable_define(config_dictionary, 'classification_batch_size', arg_type='int', default_value=4096)
         self.model.open_weights(self.weight_matrix_name)
+        self.num_outputs = self.model.bias[str(self.model.num_layers)].size
+        self.output = gnp.empty((self.classification_batch_size, self.num_outputs))
+        self.features = gnp.empty((self.classification_batch_size, self.num_feature_dim))
         self.label_file_name = self.default_variable_define(config_dictionary, 'label_file_name', arg_type='string',error_string="No label_file_name defined, just running forward pass",exit_if_no_default=False)
         if self.label_file_name != None:
             self.labels = self.read_label_file()
@@ -890,23 +897,50 @@ class NN_Tester(Neural_Network): #completed
             del self.label_file_name
             
         self.dump_config_vals()
-        self.classify()
-        self.write_posterior_prob_file()
-    def classify(self): #completed
-        self.posterior_probs = self.forward_pass(self.features)
-        try:
-            avg_cross_entropy = self.calculate_cross_entropy(self.posterior_probs, self.labels) / self.labels.size
-            print "Average cross-entropy is", avg_cross_entropy
-            print "Classification accuracy is", self.calculate_classification_accuracy(self.posterior_probs, self.labels) * 100, "\b%"
-        except AttributeError:
-            print "no labels given, so skipping classification statistics"    
-    def write_posterior_prob_file(self): #completed
-        try:
-            print "Writing to", self.output_name
-            sp.savemat(self.output_name,{'targets' : self.posterior_probs.as_numpy_array()}, oned_as='column') #output name should have .mat extension
-        except IOError:
-            print "Unable to write to ", self.output_name, "... Exiting now"
-            sys.exit()
+        self.classify_and_write()
+#        self.write_posterior_prob_file()
+    def classify_and_write(self, frame_table = None): #completed
+        if frame_table is None:
+            frame_table = self.frame_table
+        num_correct = 0
+        cross_entropy = 0.0
+        first_frame = frame_table[0]
+        last_plus_one_frame = frame_table[-1]
+        num_examples = last_plus_one_frame - first_frame
+        current_frame = frame_table[0]
+        
+        chunk_batch_size = min(self.classification_batch_size, num_examples)
+        frames = frame_table_to_frames(frame_table)
+        
+        write_pfile_header(self.output_name, frames, self.num_outputs, 0)
+        
+        while current_frame < last_plus_one_frame:
+            end_frame, chunk_size = self.read_feature_chunk(current_frame, chunk_batch_size, verbose=False)
+            batch_index = 0
+            end_index = 0
+            while end_index < chunk_size:
+                per_done = float(current_frame - first_frame + batch_index) / num_examples * 100
+                sys.stdout.write("\rCalculating Classification Statistics: %.1f%% done\r" % per_done), sys.stdout.flush()
+                end_index = min(batch_index+chunk_batch_size, chunk_size)
+                self.output[batch_index:end_index] = self.forward_pass(self.features[batch_index:end_index], 
+                                                                       verbose=False, model=self.model)
+                write_pfile_data(self.output_name, frames[current_frame + batch_index:current_frame + end_index,:], 
+                                 self.output[batch_index:end_index].as_numpy_array())
+                if hasattr(self, 'labels'):
+                    batch_labels = self.labels[current_frame + batch_index: current_frame + end_index]
+                    cross_entropy += self.calculate_cross_entropy(self.output[batch_index:end_index], batch_labels)
+                    prediction = self.output[batch_index:end_index].argmax(axis=1).reshape(batch_labels.shape)
+                    num_correct += np.sum(prediction == batch_labels)
+                
+                batch_index += self.classification_batch_size
+            current_frame = end_frame
+        
+        write_pfile_frame_table(self.output_name, frames)
+
+        if hasattr(self, 'labels'):
+            per_correct = float(num_correct) / self.labels.size * 100
+            print "Got %d of %d correct (%.2f%%) with cross-entropy %f" % (num_correct, self.labels.size, per_correct, cross_entropy)
+
         
 class NN_Trainer(Neural_Network):
     def __init__(self,config_dictionary): #completed
@@ -1371,7 +1405,7 @@ class NN_Trainer(Neural_Network):
         print "cross-entropy before steepest descent is", cross_entropy
         if self.l2_regularization_const > 0.0:
             print "regularized loss is", loss
-        print "number correctly classified is", num_correct, "of", num_examples
+        print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
         num_epochs = len(self.steepest_learning_rate)
         for epoch_num, learning_rate in enumerate(self.steepest_learning_rate):
             print "At epoch", epoch_num + 1, "of", num_epochs, "with learning rate", learning_rate
@@ -1397,7 +1431,7 @@ class NN_Trainer(Neural_Network):
             print "cross-entropy at the end of the epoch is", cross_entropy
             if self.l2_regularization_const > 0.0:
                 print "regularized loss is", loss
-            print "number correctly classified is", num_correct, "of", num_examples
+            print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
             
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
@@ -1405,7 +1439,6 @@ class NN_Trainer(Neural_Network):
     def backprop_truncated_newton(self):
         print "Starting backprop using truncated newton"
         num_feature_chunks = self.num_frames_buf / self.backprop_batch_size
-        print num_feature_chunks
         num_chunk_frames = num_feature_chunks * self.backprop_batch_size
         self.memory_management('truncated_newton', True, num_feature_chunks, False)
         
@@ -1413,7 +1446,7 @@ class NN_Trainer(Neural_Network):
         print "cross-entropy before truncated newton is", cross_entropy
         if self.l2_regularization_const > 0.0:
             print "regularized loss is", loss
-        print "number correctly classified is", num_correct, "of", num_examples
+        print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
         
         
         damping_factor = self.truncated_newton_init_damping_factor
@@ -1454,7 +1487,7 @@ class NN_Trainer(Neural_Network):
             print "cross-entropy at the end of the epoch is", cross_entropy
             if self.l2_regularization_const > 0.0:
                 print "regularized loss is", loss
-            print "number correctly classified is", num_correct, "of", num_examples
+            print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
 
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
@@ -1474,7 +1507,7 @@ class NN_Trainer(Neural_Network):
         print "cross-entropy before krylov subspace is", cross_entropy
         if self.l2_regularization_const > 0.0:
             print "regularized loss is", loss
-        print "number correctly classified is", num_correct, "of", num_examples
+        print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
 #        print "Amount of memory before allocating previous direction in use is", gnp.memory_in_use(True), "MB"
         prev_direction = Neural_Network_Weight(self.model.num_layers) #copy.deepcopy(self.model) * 0
         prev_direction.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True)
@@ -1516,7 +1549,7 @@ class NN_Trainer(Neural_Network):
             print "cross-entropy at the end of the epoch is", cross_entropy
             if self.l2_regularization_const > 0.0:
                 print "regularized loss is", loss
-            print "number correctly classified is", num_correct, "of", num_examples
+            print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
 
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)])) 
@@ -1916,7 +1949,7 @@ class NN_Trainer(Neural_Network):
     # Krylov Subspace Helper Methods
     #===========================================================================
     
-    def krylov_subspace_descent_batch(self, batch_inputs, batch_labels, model, direction, prev_direction, average_gradient = None, preconditioner = None):
+    def krylov_subspace_descent_batch(self, batch_inputs, batch_labels, model, direction, prev_direction, average_gradient = None, preconditioner = None, verbose = False):
         """
         assumed that samples are randomized
         """
@@ -1926,8 +1959,9 @@ class NN_Trainer(Neural_Network):
         krylov_end_index = batch_size / self.krylov_num_batch_splits
         bfgs_start_index = krylov_end_index
         bfgs_end_index = 2 * batch_size / self.krylov_num_batch_splits
-        sys.stdout.write("\r                                                                \r") #clear line
-        sys.stdout.write("part 1/3: calculating gradient"), sys.stdout.flush()
+        if verbose:
+            sys.stdout.write("\r                                                                \r") #clear line
+            sys.stdout.write("part 1/3: calculating gradient"), sys.stdout.flush()
         #print "\nAmount of memory in use before calc_gradient is", gnp.memory_in_use(True), "MB"
         average_gradient = self.calculate_gradient(batch_inputs, batch_labels, False, self.model, gradient_weights = average_gradient)
         #average_gradient.print_statistics()
@@ -1935,8 +1969,9 @@ class NN_Trainer(Neural_Network):
         
         #average_gradient = self.calculate_gradient(krylov_batch_inputs, krylov_batch_labels, self.model) / (batch_size / self.krylov_num_batch_splits)
         if self.use_fisher_preconditioner:
-            sys.stdout.write("\r                                                                \r")
-            sys.stdout.write("part 1/3: calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
+            if verbose:
+                sys.stdout.write("\r                                                                \r")
+                sys.stdout.write("part 1/3: calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
             preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, self.model)
             #precon = (grad2 + mones(psize,1)*conv(lambda) + maskp*conv(weightcost)).^(3/4);
             # add regularization
@@ -1949,8 +1984,9 @@ class NN_Trainer(Neural_Network):
         krylov_batch_inputs = batch_inputs[krylov_start_index:krylov_end_index]
         krylov_batch_labels = batch_labels[krylov_start_index:krylov_end_index]
         #print "\nAmount of memory before krylov in use is", gnp.memory_in_use(True), "MB"
-        sys.stdout.write("\r                                                                \r")
-        sys.stdout.write("part 2/3: calculating krylov basis"), sys.stdout.flush()
+        if verbose:
+            sys.stdout.write("\r                                                                \r")
+            sys.stdout.write("part 2/3: calculating krylov basis"), sys.stdout.flush()
         krylov_basis = self.calculate_krylov_basis(krylov_batch_inputs, krylov_batch_labels, prev_direction, average_gradient, self.model, preconditioner) #, preconditioner = average_gradient ** 2)
 
         if self.krylov_use_hessian_preconditioner:            
@@ -1967,8 +2003,9 @@ class NN_Trainer(Neural_Network):
 
         bfgs_batch_inputs = batch_inputs[bfgs_start_index:bfgs_end_index]
         bfgs_batch_labels = batch_labels[bfgs_start_index:bfgs_end_index]
-        sys.stdout.write("\r                                                                \r")
-        sys.stdout.write("part 3/3: calculating mix of krylov basis using bfgs"), sys.stdout.flush()
+        if verbose:
+            sys.stdout.write("\r                                                                \r")
+            sys.stdout.write("part 3/3: calculating mix of krylov basis using bfgs"), sys.stdout.flush()
         #print gnp.memory_in_use(True)
         step_size = self.bfgs(bfgs_batch_inputs, bfgs_batch_labels, krylov_basis, self.krylov_num_bfgs_epochs)
 
@@ -1983,7 +2020,7 @@ class NN_Trainer(Neural_Network):
         del krylov_basis
         gnp.free_reuse_cache(False)
     
-    def calculate_krylov_basis(self, batch_inputs, batch_labels, prev_direction, gradient = None, model = None, preconditioner = None): #need to test
+    def calculate_krylov_basis(self, batch_inputs, batch_labels, prev_direction, gradient = None, model = None, preconditioner = None, verbose = False): #need to test
         if model == None:
             model = self.model
         batch_size = batch_inputs.shape[0]
@@ -2002,8 +2039,9 @@ class NN_Trainer(Neural_Network):
             gnp.free_reuse_cache(False)
         
         for basis_num in range(1,self.krylov_num_directions+1):
-            sys.stdout.write("\r                                                                \r")
-            sys.stdout.write("calculating basis number %d of %d" % (basis_num, self.krylov_num_directions)), sys.stdout.flush()
+            if verbose:
+                sys.stdout.write("\r                                                                \r")
+                sys.stdout.write("calculating basis number %d of %d" % (basis_num, self.krylov_num_directions)), sys.stdout.flush()
             #print "krylov basis norm is", krylov_basis[basis_num-1].norm(excluded_keys)
             
             krylov_basis[basis_num-1] /= krylov_basis[basis_num-1].norm(excluded_keys)
@@ -2065,8 +2103,8 @@ class NN_Trainer(Neural_Network):
         cur_step = np.zeros(num_directions)
         prev_step = np.zeros(num_directions)
         bfgs_mat = np.identity(num_directions)
-        Hk = np.zeros(bfgs_mat.shape)
-        HkT = np.zeros(bfgs_mat.shape)
+#        Hk = np.zeros(bfgs_mat.shape)
+#        HkT = np.zeros(bfgs_mat.shape)
         init_step_size = 1.0
         model_update = Neural_Network_Weight(model.num_layers)
         model_update.init_zero_weights(model.get_architecture(), last_layer_logistic=True)
@@ -2077,8 +2115,9 @@ class NN_Trainer(Neural_Network):
         subspace_direction = np.zeros(subspace_cur_gradient.shape)
         
         for epoch in range(num_epochs):
-            print "\r                                                                \r", #clear line
-            sys.stdout.write("\rbfgs epoch %d of %d\r" % (epoch+1, num_epochs)), sys.stdout.flush()
+            if verbose:
+                print "\r                                                                \r", #clear line
+                sys.stdout.write("\rbfgs epoch %d of %d\r" % (epoch+1, num_epochs)), sys.stdout.flush()
             subspace_direction = -np.dot(bfgs_mat, subspace_cur_gradient, out = subspace_direction)
             model_direction = self.mix_basis_directions(basis, subspace_direction, num_directions, model_direction)
 #            step = self.line_search(batch_inputs, batch_labels, model_direction, max_step_size=1.5, 
@@ -2091,7 +2130,9 @@ class NN_Trainer(Neural_Network):
 #            gnp.free_reuse_cache(False) #clean up model + model_update
             #print "Amount of memory at the end of line search calculation is", gnp.memory_in_use(True), "MB"
             if step == 0.0:
-                print "\rline search failed, returning current step\r", #not updating any parameters"
+                if verbose:
+                    print "\r                                                                \r", #clear line
+                    print "\rline search failed, returning current step\r", #not updating any parameters"
                 return cur_step
             else:
                 prev_step[...] = cur_step
@@ -2123,11 +2164,16 @@ class NN_Trainer(Neural_Network):
                                 np.dot(bfgs_mat, (identity_mat - np.outer(grad_condition, step_condition) / curvature_condition)))
                                 + np.outer(step_condition, step_condition) / curvature_condition)
             if safe_mode: #calculates svd to see if bfgs matrix is too ill-conditioned
-                U,s,V = np.linalg.svd(bfgs_mat)
+                try:
+                    U,s,V = np.linalg.svd(bfgs_mat)
+                except np.linalg.LinAlgError:
+                    break
                 #print "singular values of bfgs matrix are", s
                 condition_number = max(s) / min(s)
                 if condition_number > 32768.0: #16-bits lost in precision, which means that the models will be pretty crappy, so stop there
-                    print "condition number of bfgs matrix is too high:", condition_number, "so returning current step\r"
+                    if verbose:
+                        print "\r                                                                \r", #clear line
+                        print "condition number of bfgs matrix is too high:", condition_number, "so returning current step\r"
                     break
         #clean up
         del bfgs_mat
@@ -2204,9 +2250,10 @@ class NN_Trainer(Neural_Network):
     def truncated_newton_batch(self, batch_inputs, batch_labels, model, damping_factor, gradient = None, 
                                init_search_direction = None, model_update = None, verbose = False):
         batch_size = batch_inputs.shape[0]
-        excluded_keys = {'bias':['0'], 'weights':[]} 
-        sys.stdout.write("\r                                                                \r") #clear line
-        sys.stdout.write("\rcalculating gradient\r"), sys.stdout.flush()
+        excluded_keys = {'bias':['0'], 'weights':[]}
+        if verbose:
+            sys.stdout.write("\r                                                                \r") #clear line
+            sys.stdout.write("\rcalculating gradient\r"), sys.stdout.flush()
 #       print "Amount of memory before gradient calculation in use is", gnp.memory_in_use(True), "MB"
         gradient = self.calculate_gradient(batch_inputs, batch_labels, check_gradient = False, model = model, 
                                            gradient_weights = gradient)
@@ -2215,8 +2262,9 @@ class NN_Trainer(Neural_Network):
         old_loss = self.calculate_loss(batch_inputs, batch_labels, model = model) #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
 #       print "Amount of memory after calculate_loss calculation in use is", gnp.memory_in_use(True), "MB"
         if self.use_fisher_preconditioner:
-            sys.stdout.write("\r                                                                \r")
-            sys.stdout.write("calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
+            if verbose:
+                sys.stdout.write("\r                                                                \r")
+                sys.stdout.write("calculating diagonal Fisher matrix for preconditioner"), sys.stdout.flush()
             
             preconditioner = self.calculate_fisher_diag_matrix(batch_inputs, batch_labels, False, model, l2_regularization_const = 0.0)
             # add regularization
@@ -2303,8 +2351,9 @@ class NN_Trainer(Neural_Network):
         
         
         for epoch in range(num_epochs):
-            print "\r                                                                \r", #clear line
-            sys.stdout.write("\rconjugate gradient epoch %d of %d\r" % (epoch+1, num_epochs)), sys.stdout.flush()
+            if verbose:
+                print "\r                                                                \r", #clear line
+                sys.stdout.write("\rconjugate gradient epoch %d of %d\r" % (epoch+1, num_epochs)), sys.stdout.flush()
             
             second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_labels, search_direction, model, 
                                                                            second_order_type=second_order_type, hiddens = hiddens)
@@ -2313,7 +2362,8 @@ class NN_Trainer(Neural_Network):
                                                   
             curvature = search_direction.dot(second_order_direction,excluded_keys)
             if curvature <= 0:
-                print "curvature must be positive, but is instead", curvature, "returning current weights"
+                if verbose:
+                    print "curvature must be positive, but is instead", curvature, "returning current weights"
                 break
             
             step_size = residual_dot / curvature
@@ -2351,7 +2401,8 @@ class NN_Trainer(Neural_Network):
             search_direction.add_mult(search_direction, conjugate_gradient_const)
 #            gnp.free_reuse_cache(False)
             residual_dot = new_residual_dot
-        
+            if residual_dot < 1E-7: #to make sure residual is not too low... i.e. really close to convergence
+                break
         #clean up
         if clean_hiddens_flag:
             del hiddens
@@ -2600,7 +2651,7 @@ class NN_Trainer(Neural_Network):
         print "cross-entropy before conjugate gradient is", cross_entropy
         if self.l2_regularization_const > 0.0:
             print "regularized loss is", loss
-        print "number correctly classified is", num_correct, "of", num_examples
+        print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
         #we have three new gradients now: conjugate_gradient_dir, old_gradient, and new_gradient
         excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
         init_step_num = 0
@@ -2676,7 +2727,7 @@ class NN_Trainer(Neural_Network):
             print "cross-entropy at the end of the epoch is", cross_entropy
             if self.l2_regularization_const > 0.0:
                 print "regularized loss is", loss
-            print "number correctly classified is", num_correct, "of", num_examples
+            print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
             
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
@@ -2879,7 +2930,7 @@ class NN_Trainer(Neural_Network):
 def init_arg_parser():
     required_variables = dict()
     all_variables = dict()
-    required_variables['train'] = [ 'feature_file_name', 'output_name', 'context_window']
+    required_variables['train'] = [ 'feature_file_name', 'output_name']
     all_variables['train'] = required_variables['train'] + ['label_file_name', 'hiddens_structure', 'weight_matrix_name', 
                                'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 'save_each_epoch',
                                'do_pretrain', 'pretrain_method', 'pretrain_iterations', 
@@ -2891,9 +2942,10 @@ def init_arg_parser():
                                'truncated_newton_num_cg_epochs', 'truncated_newton_init_damping_factor',
                                'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix',
                                'krylov_use_hessian_preconditioner', 'krylov_eigenvalue_floor_const', 
-                               'fisher_preconditioner_floor_val', 'use_fisher_preconditioner', 'max_gpu_memory_usage']
-    required_variables['test'] =  ['feature_file_name', 'weight_matrix_name', 'output_name', 'context_window', 'training_seed']
-    all_variables['test'] =  required_variables['test'] + ['label_file_name', 'max_gpu_memory_usage']
+                               'fisher_preconditioner_floor_val', 'use_fisher_preconditioner', 'max_gpu_memory_usage', 'training_seed',
+                               'context_window']
+    required_variables['test'] =  ['feature_file_name', 'weight_matrix_name', 'output_name']
+    all_variables['test'] =  required_variables['test'] + ['label_file_name', 'max_gpu_memory_usage', 'classification_batch_size', 'context_window']
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', help='mode for DNN, either train or test', required=False)

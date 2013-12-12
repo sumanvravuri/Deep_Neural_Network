@@ -976,7 +976,7 @@ class NN_Trainer(Neural_Network):
         old_settings = np.seterr(over='raise',under='raise',invalid='raise')
         
         self.mode = 'train'
-        self.training_seed = self.default_variable_define(config_dictionary, 'training_seed', arg_type='float', default_value=0)
+        self.training_seed = self.default_variable_define(config_dictionary, 'training_seed', arg_type='int', default_value=0)
         super(NN_Trainer,self).__init__(config_dictionary)
         self.num_training_examples = self.frame_table[-1]
         self.check_keys(config_dictionary)
@@ -2459,7 +2459,7 @@ class NN_Trainer(Neural_Network):
             max_per_layer_update_MB = max(architecture) * 2 * max([gradient_batch_size, krylov_batch_size * 2, bfgs_batch_size]) * sample_size_MB
             
             # calculate amount of memory used for gradient calculation
-            grad_features_size_MB = self.num_training_examples * self.num_feature_dim * sample_size_MB
+            grad_features_size_MB = self.backprop_batch_size * self.num_feature_dim * sample_size_MB
             grad_hids_size_MB = gradient_batch_size * num_total_hidden_units * sample_size_MB
             max_grad_per_layer_update_MB = max(architecture) * 3 * gradient_batch_size * sample_size_MB
             gradient_calculation_size_MB = 3 * weight_size_MB + grad_features_size_MB + grad_hids_size_MB + max_grad_per_layer_update_MB
@@ -2488,7 +2488,7 @@ class NN_Trainer(Neural_Network):
                 max_features_size_MB = self.num_training_examples * self.num_feature_dim * sample_size_MB
                 non_feature_memory_MB = total_memory_MB - features_size_MB
                 extra_memory = self.max_gpu_memory_usage - non_feature_memory_MB
-                num_feature_chunks = min(extra_memory / features_size_MB, int(np.ceil(float(self.num_training_examples) / self.backprop_batch_size)))
+                num_feature_chunks = min(int(extra_memory / features_size_MB), int(np.ceil(float(self.num_training_examples) / self.backprop_batch_size)))
                 total_memory_MB += (num_feature_chunks-1) * features_size_MB
             else:
                 max_features_size_MB = self.num_training_examples * self.num_feature_dim * sample_size_MB
@@ -2526,7 +2526,7 @@ class NN_Trainer(Neural_Network):
                 max_features_size_MB = self.num_training_examples * self.num_feature_dim * sample_size_MB
                 non_feature_memory_MB = total_memory_MB - features_size_MB
                 extra_memory = self.max_gpu_memory_usage - non_feature_memory_MB
-                num_feature_chunks = min(extra_memory / features_size_MB, int(np.ceil(float(self.num_training_examples) / self.backprop_batch_size)))
+                num_feature_chunks = min(int(extra_memory / features_size_MB), int(np.ceil(float(self.num_training_examples) / self.backprop_batch_size)))
                 total_memory_MB += (num_feature_chunks-1) * features_size_MB
             else:
                 max_features_size_MB = self.num_training_examples * self.num_feature_dim * sample_size_MB
@@ -2620,7 +2620,7 @@ class NN_Trainer(Neural_Network):
             elif num_feature_chunks is None:
                 max_features_size_MB = self.num_training_examples * (np.max(rbm_feature_size) * sample_size_MB)
                 #max_buffer_size_MB = input_feature_buffer_dim * self.num_training_examples * sample_size_MB
-                num_buffer_feature_chunks = self.max_gpu_memory_usage / buffer_size_MB
+                num_buffer_feature_chunks = int(self.max_gpu_memory_usage / buffer_size_MB)
                 non_feature_memory_MB = total_memory_MB - features_size_MB
                 extra_memory = self.max_gpu_memory_usage - non_feature_memory_MB
                 num_feature_chunks = min(int(extra_memory / features_size_MB), num_buffer_feature_chunks)

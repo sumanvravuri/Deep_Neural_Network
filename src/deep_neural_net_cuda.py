@@ -2272,7 +2272,7 @@ class NN_Trainer(Neural_Network):
             preconditioner = (preconditioner + self.l2_regularization_const + damping_factor) ** (3./4.)
             preconditioner = preconditioner.clip(preconditioner.max(excluded_keys) * self.fisher_preconditioner_floor_val, float("Inf"))
 #                print "Amount of memory before conjugate_gradient calculation in use is", gnp.memory_in_use(True), "MB"
-        model_update, model_vals = self.conjugate_gradient(batch_inputs, batch_labels, self.truncated_newton_num_cg_epochs, model=model, 
+        model_update, model_vals = self.linear_conjugate_gradient(batch_inputs, batch_labels, self.truncated_newton_num_cg_epochs, model=model, 
                                                            damping_factor=damping_factor, preconditioner=preconditioner, gradient=gradient, 
                                                            second_order_type=self.second_order_matrix, init_search_direction=init_search_direction,
                                                            verbose = False, hiddens = None, model_update = model_update)
@@ -2283,19 +2283,26 @@ class NN_Trainer(Neural_Network):
 #                gnp.free_reuse_cache(False)
         new_loss = self.calculate_loss(batch_inputs, batch_labels, model=model)  #self.calculate_cross_entropy(self.forward_pass(batch_inputs, verbose=False, model=self.model), batch_labels)
         model_num = (new_loss - old_loss) / batch_size
+        if model_num < 0.0:
+#            print model_num, damping_factor
+            init_search_direction.assign_weights(model_update)
+        else:
+            model.add_mult(model_update, -1.0) #not sure if I should unroll the update
+            init_search_direction *= 0.0
+            print "failed to produce a descent direction"
         if verbose:
             sys.stdout.write("\r                                                                      \r") #clear line
             print "model ratio is", model_num / model_den,
-        if model_num / model_den < 0.25:
+        if (model_den < 0.0 and model_num > 0.25 * model_den) or (model_den >= 0.0 and model_num < 0.25 * model_den):#model_num / model_den < 0.25: basically but make sure no division by zero errors
             damping_factor *= 1.5
-        elif model_num / model_den > 0.75:
+        elif (model_den < 0.0 and model_num < 0.75 * model_den) or (model_den >= 0.0 and model_num > 0.75 * model_den):#model_num / model_den > 0.75:
             damping_factor *= 2./3.
             
         return model_update, damping_factor
             
-    def conjugate_gradient(self, batch_inputs, batch_labels, num_epochs, model = None, damping_factor = 0.0, #seems to be correct, compare with conjugate_gradient.py
-                           verbose = False, preconditioner = None, gradient = None, second_order_type='gauss-newton', 
-                           init_search_direction = None, hiddens = None, model_update = None):
+    def linear_conjugate_gradient(self, batch_inputs, batch_labels, num_epochs, model = None, damping_factor = 0.0, #seems to be correct, compare with conjugate_gradient.py
+                                  verbose = False, preconditioner = None, gradient = None, second_order_type='gauss-newton', 
+                                  init_search_direction = None, hiddens = None, model_update = None, residual_dot_tol = 1E-9):
         #minimizes function q_x(p) = \grad_x f(x)' p + 1/2 * p'Gp (where x is fixed) use linear conjugate gradient
         if verbose:
             print "preconditioner is", preconditioner
@@ -2316,6 +2323,8 @@ class NN_Trainer(Neural_Network):
         residual.init_zero_weights(model.get_architecture(), last_layer_logistic=True, verbose=False)
         preconditioned_residual = Neural_Network_Weight(num_layers=model.num_layers)
         preconditioned_residual.init_zero_weights(model.get_architecture(), last_layer_logistic=True, verbose=False)
+        search_direction = Neural_Network_Weight(num_layers=model.num_layers)
+        search_direction.init_zero_weights(model.get_architecture(), last_layer_logistic=True, verbose=False)
         
 #        batch_size = batch_inputs.shape[0]
         clean_hiddens_flag = False
@@ -2346,7 +2355,7 @@ class NN_Trainer(Neural_Network):
         if preconditioner != None:
             preconditioned_residual /= preconditioner
 
-        search_direction = -preconditioned_residual
+        search_direction.assign_weights(-preconditioned_residual)
         residual_dot = residual.dot(preconditioned_residual, excluded_keys)
         
         
@@ -2383,7 +2392,7 @@ class NN_Trainer(Neural_Network):
             test_gap = int(np.max([np.ceil(epoch * gap_ratio), min_gap]))
             if epoch > test_gap: #checking termination condition
                 previous_model_val = model_vals[-test_gap]
-                if (previous_model_val - model_val) / model_val <= tolerance * test_gap and previous_model_val < 0:
+                if (previous_model_val - model_val) <= (model_val * tolerance * test_gap) and previous_model_val < 0.0:
                     if verbose:
                         print "\r                                                                \r", #clear line
                         sys.stdout.write("\rtermination condition satisfied for conjugate gradient, returning step\r"), sys.stdout.flush()
@@ -2396,12 +2405,14 @@ class NN_Trainer(Neural_Network):
 #            gnp.free_reuse_cache(False)
             new_residual_dot = residual.dot(preconditioned_residual, excluded_keys)
             conjugate_gradient_const = new_residual_dot / residual_dot
+            
 #            search_direction = -preconditioned_residual + search_direction * conjugate_gradient_const
-            search_direction = -preconditioned_residual
+            search_direction.assign_weights(-preconditioned_residual)
             search_direction.add_mult(search_direction, conjugate_gradient_const)
 #            gnp.free_reuse_cache(False)
             residual_dot = new_residual_dot
-            if residual_dot < 1E-7: #to make sure residual is not too low... i.e. really close to convergence
+            if residual_dot < residual_dot_tol: #next iteration will have a ZeroDivisionError if this is too small
+                print "residual_dot too small... breaking"
                 break
         #clean up
         if clean_hiddens_flag:

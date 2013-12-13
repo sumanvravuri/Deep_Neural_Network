@@ -1005,7 +1005,7 @@ class NN_Trainer(Neural_Network):
             self.initial_weight_max = self.default_variable_define(config_dictionary, 'initial_weight_max', arg_type='float', default_value=0.1)
             self.initial_weight_min = self.default_variable_define(config_dictionary, 'initial_weight_min', arg_type='float', default_value=-0.1)
             self.initial_bias_max = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=-2.2)
-            self.initial_bias_min = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=-2.4)
+            self.initial_bias_min = self.default_variable_define(config_dictionary, 'initial_bias_min', arg_type='float', default_value=-2.4)
             self.model.init_random_weights(architecture, self.initial_bias_max, self.initial_bias_min, 
                                            self.initial_weight_min, self.initial_weight_max, last_layer_logistic=hasattr(self,'labels'),
                                            seed = self.training_seed)

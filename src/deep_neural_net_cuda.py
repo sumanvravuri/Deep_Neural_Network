@@ -1027,7 +1027,9 @@ class NN_Trainer(Neural_Network):
             
             self.model.init_random_weights(architecture, self.initial_bias_max, self.initial_bias_min, 
                                            self.initial_weight_max, self.initial_weight_min, last_layer_logistic=hasattr(self,'labels'),
-                                           self.initial_logistic_bias_max, self.initial_logistic_bias_min, seed = self.training_seed)
+                                           initial_logistic_bias_max = self.initial_logistic_bias_max, 
+                                           initial_logistic_bias_min = self.initial_logistic_bias_min, 
+                                           seed = self.training_seed)
             del architecture #we have it in the model
         #
 #        print "Amount of memory in use before reading weights file is", gnp.memory_in_use(True), "MB"

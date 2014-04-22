@@ -516,7 +516,8 @@ class Recurrent_Neural_Network(object, Vector_Math):
                                'truncated_newton_num_cg_epochs', 'truncated_newton_init_damping_factor',
                                'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix',
                                'krylov_use_hessian_preconditioner', 'krylov_eigenvalue_floor_const', 
-                               'fisher_preconditioner_floor_val', 'use_fisher_preconditioner']
+                               'fisher_preconditioner_floor_val', 'use_fisher_preconditioner',
+                               'structural_damping_const']
         self.required_variables['test'] =  ['mode', 'feature_file_name', 'weight_matrix_name', 'output_name']
         self.all_variables['test'] =  self.required_variables['test'] + ['label_file_name']
     def dump_config_vals(self):
@@ -1187,7 +1188,7 @@ class RNN_Trainer(Recurrent_Neural_Network):
                                                                    model=self.model, damping_factor=damping_factor, preconditioner=preconditioner, 
                                                                    gradient=gradient, second_order_type=self.second_order_matrix, 
                                                                    init_search_direction=model_update, verbose = False,
-                                                                    structural_damping_const = self.structural_damping_const)
+                                                                   structural_damping_const = self.structural_damping_const)
                 model_den = model_vals[-1] #- model_vals[0]
                 
                 self.model += model_update
@@ -1238,7 +1239,7 @@ class RNN_Trainer(Recurrent_Neural_Network):
             model_vals.append(0)
             residual = gradient 
         else:
-            second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_unflattened_labels, init_search_direction, 
+            second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_unflattened_labels, batch_size, init_search_direction, 
                                                                            model, second_order_type=second_order_type, hiddens = hiddens,
                                                                            structural_damping_const = structural_damping_const * damping_factor)
             residual = gradient + second_order_direction
@@ -1261,10 +1262,10 @@ class RNN_Trainer(Recurrent_Neural_Network):
             
             if damping_factor > 0.0:
                 #TODO: check to see if ... + search_direction * damping_factor is correct with structural damping
-                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_unflattened_labels, search_direction, model, second_order_type=second_order_type, hiddens = hiddens, 
+                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_unflattened_labels, batch_size, search_direction, model, second_order_type=second_order_type, hiddens = hiddens, 
                                                                                structural_damping_const = damping_factor * structural_damping_const) + search_direction * damping_factor
             else:
-                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_unflattened_labels, search_direction, model, second_order_type=second_order_type, hiddens = hiddens)
+                second_order_direction = self.calculate_second_order_direction(batch_inputs, batch_unflattened_labels, batch_size, search_direction, model, second_order_type=second_order_type, hiddens = hiddens)
                                                                             
             curvature = search_direction.dot(second_order_direction,excluded_keys)
             if curvature <= 0:
@@ -1491,7 +1492,7 @@ class RNN_Trainer(Recurrent_Neural_Network):
         
         if second_order_type == 'gauss-newton':
             output_deriv, hidden_deriv = self.pearlmutter_forward_pass(inputs, unflattened_labels, direction, batch_size, hiddens, outputs, model, stop_at='output') #nbatch x nout
-            second_order_direction = self.backward_pass(output_deriv, hiddens, inputs, model, structural_damping_const)
+            second_order_direction = self.backward_pass(output_deriv, hiddens, inputs, model, structural_damping_const, hidden_deriv)
         elif second_order_type == 'hessian':
             output_deriv, hidden_deriv = self.pearlmutter_forward_pass(inputs, unflattened_labels, direction, batch_size, hiddens, outputs, model, stop_at='output') #nbatch x nout
             second_order_direction = self.pearlmutter_backward_pass(hidden_deriv, unflattened_labels, hiddens, model, direction)

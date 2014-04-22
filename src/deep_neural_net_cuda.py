@@ -15,6 +15,7 @@ from unison_shuffle import unison_shuffle
 from read_pfile_v2 import *
 from write_pfile import *
 import math
+import datetime
 import copy
 import argparse
 
@@ -233,27 +234,33 @@ class Neural_Network_Weight(object):
         del weight_dict
         self.check_weights()
         
-    def init_random_weights(self, architecture, initial_bias_max, initial_bias_min, initial_weight_min, 
-                           initial_weight_max, last_layer_logistic=True, seed=0): #completed, expensive, should be compiled
+    def init_random_weights(self, architecture, initial_bias_max, initial_bias_min, initial_weight_max, 
+                           initial_weight_min, last_layer_logistic=True, initial_logistic_bias_max = 0.1,
+                           initial_logistic_bias_min = -0.1, seed=0): #completed, expensive, should be compiled
         np.random.seed(seed)
         self.num_layers = len(architecture) - 1
         initial_bias_range = initial_bias_max - initial_bias_min
+        initial_logistic_bias_range = initial_logistic_bias_max - initial_logistic_bias_min
         initial_weight_range = initial_weight_max - initial_weight_min
+        
         self.bias['0'] = gnp.garray(initial_bias_min + initial_bias_range * np.random.random_sample((1,architecture[0])))
         
         for layer_num in range(1,self.num_layers+1):
             weight_cur_layer = ''.join([str(layer_num-1),str(layer_num)])
             bias_cur_layer = str(layer_num)
             #print "initializing weight layer", weight_cur_layer, "and bias layer", bias_cur_layer
-            self.bias[bias_cur_layer] = gnp.garray(initial_bias_min + initial_bias_range * np.random.random_sample((1,architecture[layer_num])))
             self.weights[weight_cur_layer] = gnp.garray(initial_weight_min + initial_weight_range * 
                                                         np.random.random_sample( (architecture[layer_num-1],architecture[layer_num]) ))
             if layer_num == 0:
                 self.weight_type[weight_cur_layer] = 'rbm_gaussian_bernoulli'
+                self.bias[bias_cur_layer] = gnp.garray(initial_bias_min + initial_bias_range * np.random.random_sample((1,architecture[layer_num])))
             elif layer_num == self.num_layers and last_layer_logistic == True:
                 self.weight_type[weight_cur_layer] = 'logistic'
+                self.bias[bias_cur_layer] = gnp.garray(initial_logistic_bias_min + initial_logistic_bias_range * 
+                                                       np.random.random_sample((1,architecture[layer_num])))
             else:
                 self.weight_type[weight_cur_layer] = 'rbm_bernoulli_bernoulli'
+                self.bias[bias_cur_layer] = gnp.garray(initial_bias_min + initial_bias_range * np.random.random_sample((1,architecture[layer_num])))
         
         print "Finished Initializing Weights"
         self.check_weights()
@@ -560,7 +567,8 @@ class Neural_Network(object, Vector_Math):
         self.all_variables = dict()
         self.required_variables['train'] = ['mode', 'feature_file_name', 'output_name']
         self.all_variables['train'] = self.required_variables['train'] + ['label_file_name', 'hiddens_structure', 'weight_matrix_name', 
-                               'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 'save_each_epoch',
+                               'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 
+                               'initial_logistic_bias_max', 'initial_logistic_bias_min','save_each_epoch',
                                'do_pretrain', 'pretrain_method', 'pretrain_iterations', 
                                'pretrain_learning_rate', 'pretrain_batch_size',
                                'do_backprop', 'backprop_method', 'backprop_batch_size', 'l2_regularization_const',
@@ -577,7 +585,7 @@ class Neural_Network(object, Vector_Math):
         
     def dump_config_vals(self):
         no_attr_key = list()
-        print "********************************************************************************"
+        print "********************************************************************************************"
         print "Neural Network configuration is as follows:"
         
         for key in self.all_variables[self.mode]:
@@ -586,11 +594,11 @@ class Neural_Network(object, Vector_Math):
             else:
                 no_attr_key.append(key)
                 
-        print "********************************************************************************"
+        print "********************************************************************************************"
         print "Undefined keys are as follows:"
         for key in no_attr_key:
             print key, "not set"
-        print "********************************************************************************"
+        print "********************************************************************************************"
     def default_variable_define(self,config_dictionary,config_key, arg_type='string', 
                                 default_value=None, error_string=None, exit_if_no_default=True,
                                 acceptable_values=None):
@@ -1001,14 +1009,25 @@ class NN_Trainer(Neural_Network):
             architecture = [self.num_feature_dim] + self.hiddens_structure
             if hasattr(self, 'labels'):
                 architecture.append(np.max(self.labels)+1) #will have to change later if I have soft weights
-                
+                self.initial_logistic_bias_max = self.default_variable_define(config_dictionary, 'initial_logistic_bias_max', 
+                                                                              arg_type='float', default_value=np.log(1. / (architecture[-1]-1))+0.1)
+                self.initial_logistic_bias_min = self.default_variable_define(config_dictionary, 'initial_logistic_bias_min', 
+                                                                              arg_type='float', default_value=np.log(1. / (architecture[-1]-1))-0.1)
+            else:
+                self.initial_logistic_bias_max = 0.1
+                self.initial_logistic_bias_min = -0.1
             self.initial_weight_max = self.default_variable_define(config_dictionary, 'initial_weight_max', arg_type='float', default_value=0.1)
             self.initial_weight_min = self.default_variable_define(config_dictionary, 'initial_weight_min', arg_type='float', default_value=-0.1)
-            self.initial_bias_max = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=-2.2)
-            self.initial_bias_min = self.default_variable_define(config_dictionary, 'initial_bias_min', arg_type='float', default_value=-2.4)
+            self.initial_bias_max = self.default_variable_define(config_dictionary, 'initial_bias_max', arg_type='float', default_value=0.1)
+            self.initial_bias_min = self.default_variable_define(config_dictionary, 'initial_bias_min', arg_type='float', default_value=-0.1)
+            
+            if not hasattr(self, 'labels'):
+                self.initial_logistic_bias_max = self.initial_bias_max
+                self.initial_logistic_bias_min = self.initial_bias_min
+            
             self.model.init_random_weights(architecture, self.initial_bias_max, self.initial_bias_min, 
-                                           self.initial_weight_min, self.initial_weight_max, last_layer_logistic=hasattr(self,'labels'),
-                                           seed = self.training_seed)
+                                           self.initial_weight_max, self.initial_weight_min, last_layer_logistic=hasattr(self,'labels'),
+                                           self.initial_logistic_bias_max, self.initial_logistic_bias_min, seed = self.training_seed)
             del architecture #we have it in the model
         #
 #        print "Amount of memory in use before reading weights file is", gnp.memory_in_use(True), "MB"
@@ -1400,6 +1419,8 @@ class NN_Trainer(Neural_Network):
         
         print "starting backprop using steepest descent"
         print "Number of layers is", self.model.num_layers
+        start_time = datetime.datetime.now()
+        print "Training started at time", start_time
         
         cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
         print "cross-entropy before steepest descent is", cross_entropy
@@ -1408,7 +1429,7 @@ class NN_Trainer(Neural_Network):
         print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
         num_epochs = len(self.steepest_learning_rate)
         for epoch_num, learning_rate in enumerate(self.steepest_learning_rate):
-            print "At epoch", epoch_num + 1, "of", num_epochs, "with learning rate", learning_rate
+            print "At epoch", epoch_num + 1, "of", num_epochs, "with learning rate", learning_rate, "at time", datetime.datetime.now()
             current_frame = 0
 
             while current_frame < self.num_training_examples: #run through the batches
@@ -1435,12 +1456,19 @@ class NN_Trainer(Neural_Network):
             
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
+            print "Epoch finished at time", datetime.datetime.now()
+        end_time = datetime.datetime.now()
+        print "Training finished at time", end_time, "and ran for", end_time - start_time
 
     def backprop_truncated_newton(self):
-        print "Starting backprop using truncated newton"
+        
         num_feature_chunks = self.num_frames_buf / self.backprop_batch_size
         num_chunk_frames = num_feature_chunks * self.backprop_batch_size
         self.memory_management('truncated_newton', True, num_feature_chunks, False)
+        
+        print "Starting backprop using truncated newton"
+        start_time = datetime.datetime.now()
+        print "Training started at time", start_time
         
         cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
         print "cross-entropy before truncated newton is", cross_entropy
@@ -1458,7 +1486,7 @@ class NN_Trainer(Neural_Network):
         init_search_direction.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
         
         for epoch_num in range(self.num_epochs):
-            print "Epoch", epoch_num + 1, "of", self.num_epochs
+            print "Epoch", epoch_num + 1, "of", self.num_epochs, "at time", datetime.datetime.now()
             current_frame = 0
 
             while current_frame < self.num_training_examples: #run through the batches
@@ -1491,6 +1519,9 @@ class NN_Trainer(Neural_Network):
 
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
+            print "Epoch finished at time", datetime.datetime.now()
+        end_time = datetime.datetime.now()
+        print "Training finished at time", end_time, "and ran for", end_time - start_time
 
     def backprop_krylov_subspace(self):
         #does backprop using krylov subspace
@@ -1499,8 +1530,8 @@ class NN_Trainer(Neural_Network):
         self.memory_management('krylov_subspace', True, num_feature_chunks, False)
         excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
         print "Starting backprop using krylov subspace descent"
-        print "Number of layers is", self.model.num_layers
-        self.memory_management()
+        start_time = datetime.datetime.now()
+        print "Training started at time", start_time
 #        print "Amount of memory in use is", gnp.memory_in_use(True), "MB"
 #        end_frame, chunk_size = self.read_feature_chunk(0, 60000, shuffle=False)
         cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
@@ -1524,7 +1555,7 @@ class NN_Trainer(Neural_Network):
 #        print "Amount of after allocating previous direction memory in use is", gnp.memory_in_use(True), "MB"
         
         for epoch_num in range(self.num_epochs):
-            print "Epoch", epoch_num + 1, "of", self.num_epochs
+            print "Epoch", epoch_num + 1, "of", self.num_epochs, "at time", datetime.datetime.now()
             current_frame = 0
 
             while current_frame < self.num_training_examples: #run through the batches
@@ -1552,7 +1583,11 @@ class NN_Trainer(Neural_Network):
             print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
 
             if self.save_each_epoch:
-                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)])) 
+                self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
+                
+            print "Epoch finished at time", datetime.datetime.now()
+        end_time = datetime.datetime.now()
+        print "Training finished at time", end_time, "and ran for", end_time - start_time
     #===========================================================================
     # Steepest Descent Helper Functions
     #===========================================================================
@@ -2431,7 +2466,7 @@ class NN_Trainer(Neural_Network):
         if train_method == None:
             train_method = self.backprop_method
         if verbose:
-            print "********************************************************************************"
+            print "********************************************************************************************"
             print "Memory Management"
         sample_size_MB =  4. / (2 ** 20)
         weight_size_MB = self.model.size_MB
@@ -2645,7 +2680,7 @@ class NN_Trainer(Neural_Network):
                     raise ValueError("Estimated amount of memory to be used in", train_method, "is", total_memory_MB, "MB. This is greater than maximum allotted GPU usage", self.max_gpu_memory_usage, ", please decrease pretrain_batch_size")
                 
         if verbose:
-            print "********************************************************************************"
+            print "********************************************************************************************"
         if return_num_feature_chunks:
             return num_feature_chunks
     #===========================================================================
@@ -2943,7 +2978,8 @@ def init_arg_parser():
     all_variables = dict()
     required_variables['train'] = [ 'feature_file_name', 'output_name']
     all_variables['train'] = required_variables['train'] + ['label_file_name', 'hiddens_structure', 'weight_matrix_name', 
-                               'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 'save_each_epoch',
+                               'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 
+                               'initial_logistic_bias_max', 'initial_logistic_bias_min','save_each_epoch',
                                'do_pretrain', 'pretrain_method', 'pretrain_iterations', 
                                'pretrain_learning_rate', 'pretrain_batch_size',
                                'do_backprop', 'backprop_method', 'backprop_batch_size', 'l2_regularization_const',

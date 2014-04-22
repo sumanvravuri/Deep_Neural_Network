@@ -1422,7 +1422,7 @@ class NN_Trainer(Neural_Network):
         print "starting backprop using steepest descent"
         print "Number of layers is", self.model.num_layers
         start_time = datetime.datetime.now()
-        print "Training started at time", start_time
+        print "Training started at", start_time
         
         cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
         print "cross-entropy before steepest descent is", cross_entropy
@@ -1431,7 +1431,7 @@ class NN_Trainer(Neural_Network):
         print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
         num_epochs = len(self.steepest_learning_rate)
         for epoch_num, learning_rate in enumerate(self.steepest_learning_rate):
-            print "At epoch", epoch_num + 1, "of", num_epochs, "with learning rate", learning_rate, "at time", datetime.datetime.now()
+            print "At epoch", epoch_num + 1, "of", num_epochs, "with learning rate", learning_rate, "at", datetime.datetime.now()
             current_frame = 0
 
             while current_frame < self.num_training_examples: #run through the batches
@@ -1458,9 +1458,9 @@ class NN_Trainer(Neural_Network):
             
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
-            print "Epoch finished at time", datetime.datetime.now()
+            print "Epoch finished at", datetime.datetime.now()
         end_time = datetime.datetime.now()
-        print "Training finished at time", end_time, "and ran for", end_time - start_time
+        print "Training finished at", end_time, "and ran for", end_time - start_time
 
     def backprop_truncated_newton(self):
         
@@ -1470,7 +1470,7 @@ class NN_Trainer(Neural_Network):
         
         print "Starting backprop using truncated newton"
         start_time = datetime.datetime.now()
-        print "Training started at time", start_time
+        print "Training started at", start_time
         
         cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
         print "cross-entropy before truncated newton is", cross_entropy
@@ -1488,7 +1488,7 @@ class NN_Trainer(Neural_Network):
         init_search_direction.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True, verbose=False)
         
         for epoch_num in range(self.num_epochs):
-            print "Epoch", epoch_num + 1, "of", self.num_epochs, "at time", datetime.datetime.now()
+            print "Epoch", epoch_num + 1, "of", self.num_epochs, "at", datetime.datetime.now()
             current_frame = 0
 
             while current_frame < self.num_training_examples: #run through the batches
@@ -1521,9 +1521,9 @@ class NN_Trainer(Neural_Network):
 
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
-            print "Epoch finished at time", datetime.datetime.now()
+            print "Epoch finished at", datetime.datetime.now()
         end_time = datetime.datetime.now()
-        print "Training finished at time", end_time, "and ran for", end_time - start_time
+        print "Training finished at", end_time, "and ran for", end_time - start_time
 
     def backprop_krylov_subspace(self):
         #does backprop using krylov subspace
@@ -1533,7 +1533,7 @@ class NN_Trainer(Neural_Network):
         excluded_keys = {'bias':['0'], 'weights':[]} #will have to change this later
         print "Starting backprop using krylov subspace descent"
         start_time = datetime.datetime.now()
-        print "Training started at time", start_time
+        print "Training started at", start_time
 #        print "Amount of memory in use is", gnp.memory_in_use(True), "MB"
 #        end_frame, chunk_size = self.read_feature_chunk(0, 60000, shuffle=False)
         cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
@@ -1557,7 +1557,7 @@ class NN_Trainer(Neural_Network):
 #        print "Amount of after allocating previous direction memory in use is", gnp.memory_in_use(True), "MB"
         
         for epoch_num in range(self.num_epochs):
-            print "Epoch", epoch_num + 1, "of", self.num_epochs, "at time", datetime.datetime.now()
+            print "Epoch", epoch_num + 1, "of", self.num_epochs, "at", datetime.datetime.now()
             current_frame = 0
 
             while current_frame < self.num_training_examples: #run through the batches
@@ -1587,9 +1587,9 @@ class NN_Trainer(Neural_Network):
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
                 
-            print "Epoch finished at time", datetime.datetime.now()
+            print "Epoch finished at", datetime.datetime.now()
         end_time = datetime.datetime.now()
-        print "Training finished at time", end_time, "and ran for", end_time - start_time
+        print "Training finished at", end_time, "and ran for", end_time - start_time
     #===========================================================================
     # Steepest Descent Helper Functions
     #===========================================================================

@@ -807,7 +807,7 @@ class Neural_Network(object, Vector_Math):
         else:
             print "seems copacetic"
             
-    def check_labels(self): #ugly, I should extend gnumpy to include a len, a unitq and bincount functions
+    def check_labels(self, enforce_sequential_labels = False): #ugly, I should extend gnumpy to include a len, a unitq and bincount functions
         print "Checking labels..."
         #labels = np.array([int(x) for x in self.labels.as_numpy_array()])
         if len(self.labels.shape) != 1 and ((len(self.labels.shape) == 2 and self.labels.shape[1] != 1) or len(self.labels.shape) > 2):
@@ -818,9 +818,10 @@ class Neural_Network(object, Vector_Math):
         if self.labels.size != self.frame_table[-1]:
             print "Number of examples in feature file: ", self.frame_table[-1], " does not equal size of label file, ", self.labels.size, "... Exiting now"
             sys.exit()
-        if  [i for i in np.unique(self.labels)] != range(np.max(self.labels)+1):
-            print "Labels need to be in the form 0,1,2,....,n,... Exiting now"
-            sys.exit()
+        if enforce_sequential_labels:
+            if  [i for i in np.unique(self.labels)] != range(np.max(self.labels)+1):
+                print "Labels need to be in the form 0,1,2,....,n,... Exiting now"
+                sys.exit()
         label_counts = np.bincount(np.ravel(self.labels)) #[self.labels.count(x) for x in range(np.max(self.labels)+1)]
         print "distribution of labels is:"
         for x in range(len(label_counts)):

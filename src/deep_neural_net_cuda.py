@@ -1095,7 +1095,7 @@ class NN_Trainer(Neural_Network):
             if self.validation_feature_file_name is not None:
                 self.validation_label_file_name = self.default_variable_define(config_dictionary, 'validation_label_file_name', arg_type='string', exit_if_no_default = True)
                 self.validation_labels = self.read_label_file(self.validation_label_file_name)
-                self.validation_num_feature_dim, self.validation_frame_table = self.read_feature_file_stats()
+                self.validation_num_feature_dim, self.validation_frame_table = self.read_feature_file_stats(self.validation_feature_file_name)
                 assert(self.validation_num_feature_dim == self.num_feature_dim)
                 
             self.backprop_method = self.default_variable_define(config_dictionary, 'backprop_method', default_value='steepest_descent', 

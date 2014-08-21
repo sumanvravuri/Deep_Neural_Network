@@ -235,8 +235,9 @@ class Neural_Network_Weight(object):
         self.check_weights()
         
     def init_random_weights(self, architecture, initial_bias_max, initial_bias_min, initial_weight_max, 
-                           initial_weight_min, last_layer_logistic=True, initial_logistic_bias_max = 0.1,
-                           initial_logistic_bias_min = -0.1, seed=0): #completed, expensive, should be compiled
+                           initial_weight_min, last_layer_logistic = True, last_layer_linear = False,
+                           initial_logistic_bias_max = 0.1, initial_logistic_bias_min = -0.1, seed = 0): #completed, expensive, should be compiled
+        assert(not (last_layer_logistic and last_layer_linear))
         np.random.seed(seed)
         self.num_layers = len(architecture) - 1
         initial_bias_range = initial_bias_max - initial_bias_min
@@ -254,7 +255,13 @@ class Neural_Network_Weight(object):
             if layer_num == 0:
                 self.weight_type[weight_cur_layer] = 'rbm_gaussian_bernoulli'
                 self.bias[bias_cur_layer] = gnp.garray(initial_bias_min + initial_bias_range * np.random.random_sample((1,architecture[layer_num])))
+            
             elif layer_num == self.num_layers and last_layer_logistic == True:
+                self.weight_type[weight_cur_layer] = 'logistic'
+                self.bias[bias_cur_layer] = gnp.garray(initial_logistic_bias_min + initial_logistic_bias_range * 
+                                                       np.random.random_sample((1,architecture[layer_num])))
+                
+            elif layer_num == self.num_layers and last_layer_linear == True: #for max margin methods
                 self.weight_type[weight_cur_layer] = 'logistic'
                 self.bias[bias_cur_layer] = gnp.garray(initial_logistic_bias_min + initial_logistic_bias_range * 
                                                        np.random.random_sample((1,architecture[layer_num])))
@@ -380,11 +387,13 @@ class Neural_Network_Weight(object):
         else:
             print output_name, "successfully saved"
             del weight_dict
+            
     def assign_weights(self, assignor_weights):
         for key in self.weights:
             self.weights[key][...] = assignor_weights.weights[key]
         for key in self.bias:
-            self.bias[key][...] = assignor_weights.bias[key] 
+            self.bias[key][...] = assignor_weights.bias[key]
+            
     def __neg__(self):
         nn_output = Neural_Network_Weight(self.num_layers) #copy.deepcopy(self.model) * 0
         nn_output.init_zero_weights(self.get_architecture(), last_layer_logistic = (self.weight_type[''.join([str(self.num_layers-1),str(self.num_layers)])] == 'logistic'))
@@ -579,7 +588,7 @@ class Neural_Network(object, Vector_Math):
                                'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix',
                                'krylov_use_hessian_preconditioner', 'krylov_eigenvalue_floor_const', 
                                'fisher_preconditioner_floor_val', 'use_fisher_preconditioner', 'max_gpu_memory_usage', 'training_seed',
-                               'context_window']
+                               'context_window', 'validation_feature_file_name', 'validation_label_file_name']
         self.required_variables['test'] =  ['mode', 'feature_file_name', 'weight_matrix_name', 'output_name']
         self.all_variables['test'] =  self.required_variables['test'] + ['label_file_name', 'max_gpu_memory_usage', 'classification_batch_size', 'context_window']
         
@@ -599,6 +608,7 @@ class Neural_Network(object, Vector_Math):
         for key in no_attr_key:
             print key, "not set"
         print "********************************************************************************************"
+        
     def default_variable_define(self,config_dictionary,config_key, arg_type='string', 
                                 default_value=None, error_string=None, exit_if_no_default=True,
                                 acceptable_values=None):
@@ -647,6 +657,7 @@ class Neural_Network(object, Vector_Math):
 #        except IOError:
 #            print "Unable to open ", self.feature_file_name, "... Exiting now"
 #            sys.exit()
+
     def read_feature_file(self): #completed
         try:
             data, frames, labels, frame_table = read_pfile(self.feature_file_name, False)#in MATLAB format
@@ -657,20 +668,25 @@ class Neural_Network(object, Vector_Math):
             print "Unable to open ", self.feature_file_name, "... Exiting now"
             sys.exit()
     
-    def read_feature_file_stats(self): #completed
+    def read_feature_file_stats(self, feature_file_name = None): #completed
+        if feature_file_name is None:
+            feature_file_name = self.feature_file_name
         try:
-            return read_pfile(self.feature_file_name, True)#in MATLAB format
+            return read_pfile(feature_file_name, True)#in MATLAB format
         except IOError:
-            print "Unable to open ", self.feature_file_name, "... Exiting now"
+            print "Unable to open ", feature_file_name, "... Exiting now"
             sys.exit()
     
-    def read_feature_chunk(self, current_frame, num_frames, shuffle = False, features = None, verbose = True, shuffle_seed = 0):
+    def read_feature_chunk(self, current_frame, num_frames, shuffle = False, features = None, verbose = True, shuffle_seed = 0, 
+                           feature_file_name = None):
         """returns feature chunk of num_frames with correct context
         windowing
         only returns full sequence lengths less than num_frames asked
         """
         if features is None:
             features = self.features
+        if feature_file_name is None:
+            feature_file_name = self.feature_file_name
         end_frame = int(min(current_frame+num_frames, self.frame_table[-1]))
 #        chunk_size = end_frame - current_frame
         try:
@@ -682,7 +698,7 @@ class Neural_Network(object, Vector_Math):
         end_frame = self.frame_table[end_sentence]
 #        current_frame_within_chunk = current_frame - self.frame_table[start_sentence]
 #        end_frame_within_chunk = end_frame - self.frame_table[start_sentence]
-        data, frame, label, frame_table = read_pfile(self.feature_file_name, False, sent_indices = (start_sentence, end_sentence))
+        data, frame, label, frame_table = read_pfile(feature_file_name, False, sent_indices = (start_sentence, end_sentence))
         if self.context_window != 1:
             new_data = context_window(data, frame, self.context_window, False, None, False)#[current_frame_within_chunk:end_frame_within_chunk]
         else:
@@ -703,9 +719,11 @@ class Neural_Network(object, Vector_Math):
     def shuffle_labels(self, batch_labels, permutation_vector):
         return np.array([batch_labels[x] for x in permutation_vector]).reshape(batch_labels.shape)
         
-    def read_label_file(self): #completed
+    def read_label_file(self, label_file_name = None): #completed
+        if label_file_name is None:
+            label_file_name = self.label_file_name
         try:
-            return sp.loadmat(self.label_file_name)['labels'].astype(int) #in MATLAB format
+            return sp.loadmat(label_file_name)['labels'].astype(int) #in MATLAB format
         except IOError:
             print "Unable to open ", self.label_file_name, "... Exiting now"
             sys.exit()
@@ -788,6 +806,7 @@ class Neural_Network(object, Vector_Math):
             sys.exit()
         else:
             print "seems copacetic"
+            
     def check_labels(self): #ugly, I should extend gnumpy to include a len, a unitq and bincount functions
         print "Checking labels..."
         #labels = np.array([int(x) for x in self.labels.as_numpy_array()])
@@ -807,6 +826,7 @@ class Neural_Network(object, Vector_Math):
         for x in range(len(label_counts)):
             print "# %d's: %d (%.2f%%)" % (x, label_counts[x], label_counts[x] / float(self.labels.size) * 100.)
         print "labels seem copacetic"
+        
     def forward_layer(self, inputs, weights, biases, weight_type, outputs = None): #completed
         return_outputs_flag = False
         if outputs is None:
@@ -854,6 +874,7 @@ class Neural_Network(object, Vector_Math):
         cur_layer = self.forward_layer(cur_layer, model.weights[weight_cur_layer], 
                                            model.bias[bias_cur_layer], 'linear')
         return cur_layer
+    
     def forward_pass(self, inputs, verbose=True, model=None): #completed
         # forward pass each layer starting with feature level
         if model == None:
@@ -869,10 +890,12 @@ class Neural_Network(object, Vector_Math):
             
         gnp.free_reuse_cache(False)
         return cur_layer
+    
     def calculate_cross_entropy(self, output, labels): #completed, expensive, should be compiled
         output_cpu = output.as_numpy_array()
         #labels_cpu = np.array([int(x) for x in labels.as_numpy_array()])
         return -np.sum(np.log([max(output_cpu.item((x,labels[x])),1E-12) for x in range(labels.size)]))
+    
     def calculate_classification_accuracy(self, output, labels): #completed, possibly expensive
         prediction = output.argmax(axis=1).reshape(labels.shape)
         classification_accuracy = np.sum(prediction == labels) / float(labels.size)
@@ -898,7 +921,7 @@ class NN_Tester(Neural_Network): #completed
         self.output = gnp.empty((self.classification_batch_size, self.num_outputs))
         self.features = gnp.empty((self.classification_batch_size, self.num_feature_dim))
         self.label_file_name = self.default_variable_define(config_dictionary, 'label_file_name', arg_type='string',error_string="No label_file_name defined, just running forward pass",exit_if_no_default=False)
-        if self.label_file_name != None:
+        if self.label_file_name is not None:
             self.labels = self.read_label_file()
             self.check_labels()
         else:
@@ -907,6 +930,7 @@ class NN_Tester(Neural_Network): #completed
         self.dump_config_vals()
         self.classify_and_write()
 #        self.write_posterior_prob_file()
+
     def classify_and_write(self, frame_table = None): #completed
         if frame_table is None:
             frame_table = self.frame_table
@@ -1064,6 +1088,15 @@ class NN_Trainer(Neural_Network):
             if not hasattr(self, 'labels'):
                 print "No labels found... cannot do backprop... Exiting now"
                 sys.exit()
+            
+            #Validation features for training
+            self.validation_feature_file_name = self.default_variable_define(config_dictionary, 'validation_feature_file_name', arg_type='string', exit_if_no_default = False)
+            if self.validation_feature_file_name is not None:
+                self.validation_label_file_name = self.default_variable_define(config_dictionary, 'validation_label_file_name', arg_type='string', exit_if_no_default = True)
+                self.validation_labels = self.read_label_file(self.validation_label_file_name)
+                self.validation_num_feature_dim, self.validation_frame_table = self.read_feature_file_stats()
+                assert(self.validation_num_feature_dim == self.num_feature_dim)
+                
             self.backprop_method = self.default_variable_define(config_dictionary, 'backprop_method', default_value='steepest_descent', 
                                                                 acceptable_values=['steepest_descent', 'conjugate_gradient', 'krylov_subspace', 'truncated_newton'])
             self.backprop_batch_size = self.default_variable_define(config_dictionary, 'backprop_batch_size', default_value=2048, arg_type='int')
@@ -1133,10 +1166,18 @@ class NN_Trainer(Neural_Network):
     # forward pass methods
     #===========================================================================
     
-    def calculate_classification_statistics(self, frame_table, labels, model=None):
-        if model == None:
-            model = self.model
+    def print_classification_statistics(self, stats_tuple):
+        cross_entropy, num_correct, num_examples, loss = stats_tuple
+        print "cross-entropy is", cross_entropy
+        if self.l2_regularization_const > 0.0:
+            print "regularized loss is", loss
+        print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
         
+    def calculate_classification_statistics(self, frame_table, labels, model = None, feature_file_name = None):
+        if model is None:
+            model = self.model
+        if feature_file_name is None:
+            feature_file_name = self.feature_file_name
         excluded_keys = {'bias': ['0'], 'weights': []}
         if self.do_backprop == False:
             classification_batch_size = self.pretrain_batch_size
@@ -1152,7 +1193,7 @@ class NN_Trainer(Neural_Network):
         chunk_batch_size = min(self.num_frames_buf, num_examples)
 #        print chunk_batch_size
         while current_frame < last_frame: #run through the batches
-            end_frame, chunk_size = self.read_feature_chunk(current_frame, chunk_batch_size, verbose = False)
+            end_frame, chunk_size = self.read_feature_chunk(current_frame, chunk_batch_size, verbose = False, feature_file_name = feature_file_name)
             batch_index = 0
             end_index = 0
             while end_index < chunk_size:
@@ -1168,6 +1209,7 @@ class NN_Trainer(Neural_Network):
                 num_correct += np.sum(prediction == batch_labels)
                 batch_index += classification_batch_size
             current_frame = end_frame
+        sys.stdout.write("\r                                                              \r" % per_done), sys.stdout.flush()
         loss = cross_entropy
         if self.l2_regularization_const > 0.0:
             loss += (model.norm(excluded_keys) ** 2) * self.l2_regularization_const
@@ -1414,6 +1456,7 @@ class NN_Trainer(Neural_Network):
     #===========================================================================
     # Backprop Methods
     #===========================================================================
+    
     def backprop_steepest_descent(self): #need to test regularization
         num_feature_chunks = self.num_frames_buf / self.backprop_batch_size
         num_chunk_frames = num_feature_chunks * self.backprop_batch_size
@@ -1424,12 +1467,15 @@ class NN_Trainer(Neural_Network):
         start_time = datetime.datetime.now()
         print "Training started at", start_time
         
-        cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
-        print "cross-entropy before steepest descent is", cross_entropy
-        if self.l2_regularization_const > 0.0:
-            print "regularized loss is", loss
-        print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
+        print "Statistics on the training set before steepest descent are"
+        
+        self.print_classification_statistics(self.calculate_classification_statistics(self.frame_table, self.labels, self.model))
+        if self.validation_feature_file_name is not None:
+            print "Statistics on the validation set before steepest descent are"
+            self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name))
+            
         num_epochs = len(self.steepest_learning_rate)
+        
         for epoch_num, learning_rate in enumerate(self.steepest_learning_rate):
             print "At epoch", epoch_num + 1, "of", num_epochs, "with learning rate", learning_rate, "at", datetime.datetime.now()
             current_frame = 0
@@ -1450,11 +1496,12 @@ class NN_Trainer(Neural_Network):
                 current_frame = end_frame
             sys.stdout.write("\r100.0% done \r"), sys.stdout.flush()
             
-            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
-            print "cross-entropy at the end of the epoch is", cross_entropy
-            if self.l2_regularization_const > 0.0:
-                print "regularized loss is", loss
-            print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
+            print "Statistics on the training set at the end of the epoch are"
+            self.print_classification_statistics(self.calculate_classification_statistics(self.frame_table, self.labels, self.model))
+            
+            if self.validation_feature_file_name is not None:
+                print "Statistics on the validation set at the end of the epoch are"
+                self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name))
             
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
@@ -1463,7 +1510,6 @@ class NN_Trainer(Neural_Network):
         print "Training finished at", end_time, "and ran for", end_time - start_time
 
     def backprop_truncated_newton(self):
-        
         num_feature_chunks = self.num_frames_buf / self.backprop_batch_size
         num_chunk_frames = num_feature_chunks * self.backprop_batch_size
         self.memory_management('truncated_newton', True, num_feature_chunks, False)
@@ -1472,12 +1518,11 @@ class NN_Trainer(Neural_Network):
         start_time = datetime.datetime.now()
         print "Training started at", start_time
         
-        cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
-        print "cross-entropy before truncated newton is", cross_entropy
-        if self.l2_regularization_const > 0.0:
-            print "regularized loss is", loss
-        print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
-        
+        print "Statistics on the training set before steepest descent are"
+        self.print_classification_statistics(self.calculate_classification_statistics(self.frame_table, self.labels, self.model))
+        if self.validation_feature_file_name is not None:
+            print "Statistics on the validation set before steepest descent are"
+            self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name))
         
         damping_factor = self.truncated_newton_init_damping_factor
         gradient = Neural_Network_Weight(self.model.num_layers)
@@ -1512,12 +1557,12 @@ class NN_Trainer(Neural_Network):
                     batch_index += self.backprop_batch_size
                 current_frame = end_frame
             sys.stdout.write("\r100.0% done \r"), sys.stdout.flush()
-            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
-            #print "Amount of memory in use is", gnp.memory_in_use(True), "MB"
-            print "cross-entropy at the end of the epoch is", cross_entropy
-            if self.l2_regularization_const > 0.0:
-                print "regularized loss is", loss
-            print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
+            print "Statistics on the training set at the end of the epoch are"
+            self.print_classification_statistics(self.calculate_classification_statistics(self.frame_table, self.labels, self.model))
+            
+            if self.validation_feature_file_name is not None:
+                print "Statistics on the validation set at the end of the epoch are"
+                self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name))
 
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
@@ -1536,11 +1581,11 @@ class NN_Trainer(Neural_Network):
         print "Training started at", start_time
 #        print "Amount of memory in use is", gnp.memory_in_use(True), "MB"
 #        end_frame, chunk_size = self.read_feature_chunk(0, 60000, shuffle=False)
-        cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
-        print "cross-entropy before krylov subspace is", cross_entropy
-        if self.l2_regularization_const > 0.0:
-            print "regularized loss is", loss
-        print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
+        print "Statistics on the training set before steepest descent are"
+        self.print_classification_statistics(self.calculate_classification_statistics(self.frame_table, self.labels, self.model))
+        if self.validation_feature_file_name is not None:
+            print "Statistics on the validation set before steepest descent are"
+            self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name))
 #        print "Amount of memory before allocating previous direction in use is", gnp.memory_in_use(True), "MB"
         prev_direction = Neural_Network_Weight(self.model.num_layers) #copy.deepcopy(self.model) * 0
         prev_direction.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True)
@@ -1577,12 +1622,12 @@ class NN_Trainer(Neural_Network):
                     batch_index += self.backprop_batch_size
                 current_frame = end_frame
             sys.stdout.write("\r100.0% done \r"), sys.stdout.flush()
-            cross_entropy, num_correct, num_examples, loss = self.calculate_classification_statistics(self.frame_table, self.labels, self.model)
-            #print "Amount of memory in use is", gnp.memory_in_use(True), "MB"
-            print "cross-entropy at the end of the epoch is", cross_entropy
-            if self.l2_regularization_const > 0.0:
-                print "regularized loss is", loss
-            print "number correctly classified is %d of %d (%.2f%%)" % (num_correct, num_examples, float(num_correct) / num_examples * 100)
+            print "Statistics on the training set at the end of the epoch are"
+            self.print_classification_statistics(self.calculate_classification_statistics(self.frame_table, self.labels, self.model))
+            
+            if self.validation_feature_file_name is not None:
+                print "Statistics on the validation set at the end of the epoch are"
+                self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name))
 
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
@@ -1590,6 +1635,7 @@ class NN_Trainer(Neural_Network):
             print "Epoch finished at", datetime.datetime.now()
         end_time = datetime.datetime.now()
         print "Training finished at", end_time, "and ran for", end_time - start_time
+        
     #===========================================================================
     # Steepest Descent Helper Functions
     #===========================================================================
@@ -1615,9 +1661,11 @@ class NN_Trainer(Neural_Network):
             gnp.gemm_update(hiddens[layer_num-1].T, weight_vec, learning_rate / self.backprop_batch_size, model.weights[weight_cur_layer], (1. - l2_regularization_const))
         del weight_vec
         gnp.free_reuse_cache(False)
+        
     #===========================================================================
     # Second-Order Methods Functions (those use by trun. Newton and krylov)
     #===========================================================================
+    
     def calculate_second_order_direction(self, inputs, labels, direction = None, model = None, second_order_type = None, hiddens = None, check_direction = False): #need to test
         #given an input direction direction, the function returns H*d, where H is the Hessian of the weight vector
         #the function does this efficient by using the Pearlmutter (1994) trick
@@ -1982,6 +2030,7 @@ class NN_Trainer(Neural_Network):
                 print finite_difference_model.weights[weight_cur_layer]
             sys.exit()
             ###########################################################################################
+            
     #===========================================================================
     # Krylov Subspace Helper Methods
     #===========================================================================

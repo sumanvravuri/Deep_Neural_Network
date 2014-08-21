@@ -805,7 +805,7 @@ class Neural_Network(object, Vector_Math):
         label_counts = np.bincount(np.ravel(self.labels)) #[self.labels.count(x) for x in range(np.max(self.labels)+1)]
         print "distribution of labels is:"
         for x in range(len(label_counts)):
-            print "# %d's: %d" % (x, label_counts[x])
+            print "# %d's: %d (%.2f%%)" % (x, label_counts[x], label_counts[x] / float(self.labels.size) * 100.)
         print "labels seem copacetic"
     def forward_layer(self, inputs, weights, biases, weight_type, outputs = None): #completed
         return_outputs_flag = False

@@ -1476,7 +1476,7 @@ class NN_Trainer(Neural_Network):
         self.print_classification_statistics(self.calculate_classification_statistics(self.frame_table, self.labels, self.model))
         if self.validation_feature_file_name is not None:
             print "Statistics on the validation set before steepest descent are"
-            self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name))
+            self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name, frame_table = self.validation_frame_table))
             
         num_epochs = len(self.steepest_learning_rate)
         
@@ -1505,7 +1505,7 @@ class NN_Trainer(Neural_Network):
             
             if self.validation_feature_file_name is not None:
                 print "Statistics on the validation set at the end of the epoch are"
-                self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name))
+                self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name, frame_table = self.validation_frame_table))
             
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
@@ -1526,7 +1526,7 @@ class NN_Trainer(Neural_Network):
         self.print_classification_statistics(self.calculate_classification_statistics(self.frame_table, self.labels, self.model))
         if self.validation_feature_file_name is not None:
             print "Statistics on the validation set before steepest descent are"
-            self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name))
+            self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name, frame_table = self.validation_frame_table))
         
         damping_factor = self.truncated_newton_init_damping_factor
         gradient = Neural_Network_Weight(self.model.num_layers)
@@ -1566,7 +1566,7 @@ class NN_Trainer(Neural_Network):
             
             if self.validation_feature_file_name is not None:
                 print "Statistics on the validation set at the end of the epoch are"
-                self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name))
+                self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name, frame_table = self.validation_frame_table))
 
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))
@@ -1589,7 +1589,7 @@ class NN_Trainer(Neural_Network):
         self.print_classification_statistics(self.calculate_classification_statistics(self.frame_table, self.labels, self.model))
         if self.validation_feature_file_name is not None:
             print "Statistics on the validation set before steepest descent are"
-            self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name))
+            self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name, frame_table = self.validation_frame_table))
 #        print "Amount of memory before allocating previous direction in use is", gnp.memory_in_use(True), "MB"
         prev_direction = Neural_Network_Weight(self.model.num_layers) #copy.deepcopy(self.model) * 0
         prev_direction.init_zero_weights(self.model.get_architecture(), last_layer_logistic=True)
@@ -1631,7 +1631,7 @@ class NN_Trainer(Neural_Network):
             
             if self.validation_feature_file_name is not None:
                 print "Statistics on the validation set at the end of the epoch are"
-                self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name))
+                self.print_classification_statistics(self.calculate_classification_statistics(self.validation_frame_table, self.validation_labels, self.model, self.validation_feature_file_name, frame_table = self.validation_frame_table))
 
             if self.save_each_epoch:
                 self.model.write_weights(''.join([self.output_name, '_epoch_', str(epoch_num+1)]))

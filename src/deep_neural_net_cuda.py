@@ -678,7 +678,7 @@ class Neural_Network(object, Vector_Math):
             sys.exit()
     
     def read_feature_chunk(self, current_frame, num_frames, shuffle = False, features = None, verbose = True, shuffle_seed = 0, 
-                           feature_file_name = None):
+                           feature_file_name = None, frame_table = None):
         """returns feature chunk of num_frames with correct context
         windowing
         only returns full sequence lengths less than num_frames asked
@@ -687,17 +687,20 @@ class Neural_Network(object, Vector_Math):
             features = self.features
         if feature_file_name is None:
             feature_file_name = self.feature_file_name
-        end_frame = int(min(current_frame+num_frames, self.frame_table[-1]))
+        if frame_table is None:
+            frame_table = self.frame_table
+            
+        end_frame = int(min(current_frame+num_frames, frame_table[-1]))
 #        chunk_size = end_frame - current_frame
         try:
-            start_sentence = np.where(self.frame_table == current_frame)[0][0] #start frame MUST be at the beginning of the sentence
+            start_sentence = np.where(frame_table == current_frame)[0][0] #start frame MUST be at the beginning of the sentence
         except IndexError:
             raise IndexError('current_frame must be the frame at the beginning of the sentence')
-        end_sentence = np.where(self.frame_table <= end_frame)[0][-1]
-        chunk_size = self.frame_table[end_sentence] - self.frame_table[start_sentence]
-        end_frame = self.frame_table[end_sentence]
-#        current_frame_within_chunk = current_frame - self.frame_table[start_sentence]
-#        end_frame_within_chunk = end_frame - self.frame_table[start_sentence]
+        end_sentence = np.where(frame_table <= end_frame)[0][-1]
+        chunk_size = frame_table[end_sentence] - frame_table[start_sentence]
+        end_frame = frame_table[end_sentence]
+#        current_frame_within_chunk = current_frame - frame_table[start_sentence]
+#        end_frame_within_chunk = end_frame - frame_table[start_sentence]
         data, frame, label, frame_table = read_pfile(feature_file_name, False, sent_indices = (start_sentence, end_sentence))
         if self.context_window != 1:
             new_data = context_window(data, frame, self.context_window, False, None, False)#[current_frame_within_chunk:end_frame_within_chunk]

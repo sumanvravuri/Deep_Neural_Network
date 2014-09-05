@@ -3031,23 +3031,23 @@ class NN_Trainer(Neural_Network):
 def init_arg_parser():
     required_variables = dict()
     all_variables = dict()
-    required_variables['train'] = [ 'feature_file_name', 'output_name']
+    required_variables['train'] = ['mode', 'feature_file_name', 'output_name']
     all_variables['train'] = required_variables['train'] + ['label_file_name', 'hiddens_structure', 'weight_matrix_name', 
-                               'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 
-                               'initial_logistic_bias_max', 'initial_logistic_bias_min','save_each_epoch',
-                               'do_pretrain', 'pretrain_method', 'pretrain_iterations', 
-                               'pretrain_learning_rate', 'pretrain_batch_size',
-                               'do_backprop', 'backprop_method', 'backprop_batch_size', 'l2_regularization_const',
-                               'num_epochs', 'num_line_searches', 'armijo_const', 'wolfe_const',
-                               'steepest_learning_rate',
-                               'conjugate_max_iterations', 'conjugate_const_type',
-                               'truncated_newton_num_cg_epochs', 'truncated_newton_init_damping_factor',
-                               'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix',
-                               'krylov_use_hessian_preconditioner', 'krylov_eigenvalue_floor_const', 
-                               'fisher_preconditioner_floor_val', 'use_fisher_preconditioner', 'max_gpu_memory_usage', 'training_seed',
-                               'context_window']
-    required_variables['test'] =  ['feature_file_name', 'weight_matrix_name', 'output_name']
-    all_variables['test'] =  required_variables['test'] + ['label_file_name', 'max_gpu_memory_usage', 'classification_batch_size', 'context_window']
+                                                            'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 
+                                                            'initial_logistic_bias_max', 'initial_logistic_bias_min','save_each_epoch',
+                                                            'do_pretrain', 'pretrain_method', 'pretrain_iterations', 
+                                                            'pretrain_learning_rate', 'pretrain_batch_size',
+                                                            'do_backprop', 'backprop_method', 'backprop_batch_size', 'l2_regularization_const',
+                                                            'num_epochs', 'num_line_searches', 'armijo_const', 'wolfe_const',
+                                                            'steepest_learning_rate',
+                                                            'conjugate_max_iterations', 'conjugate_const_type',
+                                                            'truncated_newton_num_cg_epochs', 'truncated_newton_init_damping_factor',
+                                                            'krylov_num_directions', 'krylov_num_batch_splits', 'krylov_num_bfgs_epochs', 'second_order_matrix',
+                                                            'krylov_use_hessian_preconditioner', 'krylov_eigenvalue_floor_const', 
+                                                            'fisher_preconditioner_floor_val', 'use_fisher_preconditioner', 'max_gpu_memory_usage', 'training_seed',
+                                                            'context_window', 'validation_feature_file_name', 'validation_label_file_name']
+    required_variables['test'] =  ['mode', 'feature_file_name', 'weight_matrix_name', 'output_name']
+    all_variables['test'] = required_variables['test'] + ['label_file_name', 'max_gpu_memory_usage', 'classification_batch_size', 'context_window']
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', help='mode for DNN, either train or test', required=False)

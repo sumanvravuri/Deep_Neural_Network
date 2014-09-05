@@ -3031,7 +3031,7 @@ class NN_Trainer(Neural_Network):
 def init_arg_parser():
     required_variables = dict()
     all_variables = dict()
-    required_variables['train'] = ['mode', 'feature_file_name', 'output_name']
+    required_variables['train'] = ['feature_file_name', 'output_name']
     all_variables['train'] = required_variables['train'] + ['label_file_name', 'hiddens_structure', 'weight_matrix_name', 
                                                             'initial_weight_max', 'initial_weight_min', 'initial_bias_max', 'initial_bias_min', 
                                                             'initial_logistic_bias_max', 'initial_logistic_bias_min','save_each_epoch',
@@ -3046,7 +3046,7 @@ def init_arg_parser():
                                                             'krylov_use_hessian_preconditioner', 'krylov_eigenvalue_floor_const', 
                                                             'fisher_preconditioner_floor_val', 'use_fisher_preconditioner', 'max_gpu_memory_usage', 'training_seed',
                                                             'context_window', 'validation_feature_file_name', 'validation_label_file_name']
-    required_variables['test'] =  ['mode', 'feature_file_name', 'weight_matrix_name', 'output_name']
+    required_variables['test'] =  ['feature_file_name', 'weight_matrix_name', 'output_name']
     all_variables['test'] = required_variables['test'] + ['label_file_name', 'max_gpu_memory_usage', 'classification_batch_size', 'context_window']
     
     parser = argparse.ArgumentParser()

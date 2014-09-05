@@ -1319,6 +1319,7 @@ class NN_Trainer(Neural_Network):
                         reconstruction_error += gnp.sum((inputs - reconstruction) * (inputs - reconstruction))
                         batch_index += self.pretrain_batch_size
                     current_frame = end_frame
+                    gnp.free_reuse_cache(False)
                 sys.stdout.write("\r100.0% done \r")
                 del hiddens
                 del hiddens_sampled
